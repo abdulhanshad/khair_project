@@ -584,6 +584,154 @@ def month_label(value: str) -> str:
     return datetime.strptime(value, "%b-%y").strftime("%b %Y")
 
 
+@st.cache_data(show_spinner=False)
+def build_section_pdf(
+    title: str,
+    month: str,
+    metrics: list[tuple[str, str]],
+    tables: list[tuple[str, list[str], list[list[str]]]],
+    refreshed_at: datetime,
+    chart: list[tuple[str, float, float]] | None = None,
+) -> bytes:
+    """Render a polished, paginated Khair report using the existing Pillow dependency."""
+    page_w, page_h = 1240, 1754
+    dark, emerald, mint = "#102B31", "#0F766E", "#E8F5EE"
+    ink, muted, edge = "#17312D", "#657871", "#D8E7E1"
+    regular_path, bold_path = "C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"
+
+    def get_font(size: int, bold: bool = False):
+        choices = [bold_path if bold else regular_path]
+        choices.append(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            if bold
+            else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+        )
+        for font_path in choices:
+            try:
+                return ImageFont.truetype(font_path, size=size)
+            except OSError:
+                continue
+        return ImageFont.load_default(size=size)
+
+    title_font, body_font = get_font(40, True), get_font(21)
+    small_font, bold_font = get_font(17), get_font(19, True)
+    pages: list[Image.Image] = []
+
+    def new_page(page_number: int) -> tuple[Image.Image, ImageDraw.ImageDraw, int]:
+        page = Image.new("RGB", (page_w, page_h), "#F7FAF8")
+        draw = ImageDraw.Draw(page)
+        draw.rectangle((0, 0, page_w, 190), fill=dark)
+        draw.rectangle((0, 184, page_w, 194), fill=emerald)
+        draw.text((72, 42), "KHAIR  /  GROUP FUND", font=small_font, fill="#72D6B6")
+        draw.text((72, 78), title, font=title_font, fill="#F2FBF7")
+        draw.text((74, 140), f"{month_label(month)}  ·  Refreshed {refreshed_at:%d %b %Y, %H:%M}", font=small_font, fill="#B7CDC6")
+        if LOGO_PATH.exists():
+            try:
+                with Image.open(LOGO_PATH) as logo:
+                    logo = logo.convert("RGBA")
+                    logo.thumbnail((405, 104))
+                    draw.rounded_rectangle((page_w - 445, 29, page_w - 48, 151), radius=16, fill="#0B1822", outline="#286257", width=2)
+                    page.paste(logo, (page_w - 439, 38), logo)
+            except OSError:
+                pass
+        draw.text((72, page_h - 55), "Khair Group Fund  ·  Read-only dashboard report", font=small_font, fill=muted)
+        draw.text((page_w - 115, page_h - 55), f"{page_number:02d}", font=bold_font, fill=emerald)
+        pages.append(page)
+        return page, draw, 230
+
+    def wrap_cell(value: str, width_px: int) -> list[str]:
+        value = str(value).strip() or "—"
+        return textwrap.wrap(value, width=max(8, int(width_px / 12)), break_long_words=True) or ["—"]
+
+    page, draw, y = new_page(1)
+    if metrics:
+        gap = 16
+        card_w = (page_w - 144 - gap * (len(metrics) - 1)) // len(metrics)
+        for index, (label, value) in enumerate(metrics):
+            x = 72 + index * (card_w + gap)
+            draw.rounded_rectangle((x, y, x + card_w, y + 128), radius=18, fill="#FFFFFF", outline=edge, width=2)
+            draw.text((x + 20, y + 19), label.upper(), font=small_font, fill=muted)
+            value_lines = wrap_cell(value, card_w - 40)[:2]
+            for line_index, line in enumerate(value_lines):
+                draw.text((x + 20, y + 57 + line_index * 34), line, font=bold_font, fill=emerald)
+        y += 164
+
+    if chart:
+        chart_top = y
+        draw.text((72, chart_top), "COLLECTION WAVE", font=get_font(22, True), fill=ink)
+        plot_left, plot_right = 98, page_w - 90
+        plot_top, plot_bottom = chart_top + 48, chart_top + 218
+        draw.rounded_rectangle((72, chart_top + 38, page_w - 72, chart_top + 242), radius=14, fill="#FFFFFF", outline=edge, width=2)
+        values = [max(0.0, item[1]) for item in chart]
+        targets = [max(0.0, item[2]) for item in chart]
+        scale_max = max(values + targets + [1.0])
+        points = []
+        target_points = []
+        for index, item in enumerate(chart):
+            x = plot_left + (plot_right - plot_left) * index / max(1, len(chart) - 1)
+            points.append((x, plot_bottom - values[index] / scale_max * (plot_bottom - plot_top)))
+            target_points.append((x, plot_bottom - targets[index] / scale_max * (plot_bottom - plot_top)))
+        draw.line([(plot_left, plot_bottom), (plot_right, plot_bottom)], fill=edge, width=2)
+        if len(points) > 1:
+            draw.polygon([*points, (plot_right, plot_bottom), (plot_left, plot_bottom)], fill="#DDF2E7")
+            draw.line(points, fill=emerald, width=6, joint="curve")
+            draw.line(target_points, fill="#D8B45C", width=3, joint="curve")
+        for index, (label, _, _) in enumerate(chart):
+            x = plot_left + (plot_right - plot_left) * index / max(1, len(chart) - 1)
+            draw.ellipse((x - 6, points[index][1] - 6, x + 6, points[index][1] + 6), fill=emerald)
+            if len(chart) <= 14 or index % max(1, len(chart) // 12) == 0:
+                draw.text((x - 35, plot_bottom + 8), label[:9], font=get_font(13), fill=muted)
+        draw.text((page_w - 245, chart_top + 48), "Collected", font=get_font(14, True), fill=emerald)
+        draw.text((page_w - 135, chart_top + 48), "Target", font=get_font(14, True), fill="#A47720")
+        y += 270
+
+    for table_title, headers, rows in tables:
+        draw.text((72, y), table_title, font=get_font(25, True), fill=ink)
+        y += 48
+        col_w = (page_w - 144) // max(1, len(headers))
+
+        def draw_table_header(start_y: int) -> int:
+            draw.rounded_rectangle((72, start_y, page_w - 72, start_y + 48), radius=8, fill=emerald)
+            for col_index, header in enumerate(headers):
+                draw.text((84 + col_index * col_w, start_y + 14), wrap_cell(header, col_w - 20)[0], font=small_font, fill="#FFFFFF")
+            return start_y + 54
+
+        y = draw_table_header(y)
+        for row_index, row in enumerate(rows):
+            wrapped = [wrap_cell(cell, col_w - 20)[:4] for cell in row]
+            row_h = max(42, max((len(lines) for lines in wrapped), default=1) * 25 + 16)
+            if y + row_h > page_h - 100:
+                page, draw, y = new_page(len(pages) + 1)
+                draw.text((72, y), f"{table_title} · continued", font=get_font(25, True), fill=ink)
+                y = draw_table_header(y + 48)
+            if row_index % 2 == 0:
+                draw.rounded_rectangle((72, y, page_w - 72, y + row_h), radius=5, fill="#EDF5F1")
+            for col_index, lines in enumerate(wrapped):
+                for line_index, line in enumerate(lines):
+                    draw.text((84 + col_index * col_w, y + 9 + line_index * 25), line, font=small_font, fill=ink)
+            y += row_h + 3
+        y += 26
+
+    output = io.BytesIO()
+    pages[0].save(output, format="PDF", save_all=True, append_images=pages[1:], resolution=144.0)
+    return output.getvalue()
+
+
+def report_dataframe_rows(frame: pd.DataFrame) -> list[list[str]]:
+    rows: list[list[str]] = []
+    for values in frame.itertuples(index=False, name=None):
+        row = []
+        for value in values:
+            if pd.isna(value):
+                row.append("—")
+            elif isinstance(value, (int, float)) and not isinstance(value, bool):
+                row.append(f"{value:,.2f}" if isinstance(value, float) else f"{value:,}")
+            else:
+                row.append(str(value))
+        rows.append(row)
+    return rows
+
+
 def load_if_needed(force: bool = False) -> None:
     if "khair_data" not in st.session_state or force:
         with st.spinner("Refreshing the latest figures…"):
@@ -618,16 +766,20 @@ dark_overrides = """
   [data-testid="stBaseButton-primary"] { background:#19A88A; border-color:#19A88A; color:#071A18; }
   [data-testid="stBaseButton-primary"]:hover { background:#38D6AD; border-color:#38D6AD; color:#071A18; }
   [data-testid="stBaseButton-secondary"] { background:#172B35; border-color:#35564F; color:#DDF3E8; }
+  .st-key-khair-menu-row [data-testid="stButton"] button { background:#0B3D36 !important; border-color:#146956 !important; color:#51DDB5 !important; }
+  .st-key-khair-menu-row [data-testid="stButton"] button:hover { background:#1B3A3E !important; border-color:#38D6AD !important; color:#F2FBF7 !important; }
   [data-testid="stTextInput"] input, [data-testid="stTextArea"] textarea { background:#142630; color:#F2FBF7; border-color:#35564F; }
   [data-testid="stSelectbox"] [data-baseweb="select"] > div { background:#142630; color:#F2FBF7; border-color:#35564F; }
   [data-testid="stRadio"] label { color:#E0ECE8; }
   .khair-hero { background:radial-gradient(ellipse at 8% 0%,#145448 0%,transparent 38%),linear-gradient(115deg,#10222D 0%,#16323B 64%,#0D3D36 100%); color:#F2FBF7; border-color:#27564F; }
   .khair-brand { color:#F2FBF7; }
+  .khair-arabic-mark { background:#0B3D36; color:#51DDB5; border-color:#146956; }
   .khair-subtitle { color:#B9CBC9; }
   .khair-top-nav a { color:#CBD8D5; }
   .khair-top-nav a:first-child, .khair-top-nav a:focus { background:#0B3D36; color:#51DDB5; border-color:#146956; }
   .khair-top-nav a:hover { background:#1B3A3E; border-color:#38D6AD; color:#F2FBF7; }
-  [data-testid="stAppViewContainer"] [data-testid="stElementContainer"]:has(.khair-hero) { background:#0D1822; border-bottom:1px solid #29454C; }
+  [data-testid="stAppViewContainer"] [class*="khair-topbar"],
+  [data-testid="stAppViewContainer"] [data-testid="stVerticalBlockBorderWrapper"]:has(.khair-hero) { background:#0D1822; border-bottom:1px solid #29454C; }
   .khair-hero { background:#101D28; border-bottom:2px solid #315D56; }
   .khair-nav-icon { background:#1D4A42; color:#B8F2DD; }
   .khair-heading-accent { background:linear-gradient(90deg,#26444A,#315D56,#26444A); }
@@ -646,17 +798,17 @@ dark_overrides = """
 """ if dark_mode else ""
 
 SECTION_LINKS = [
-    ("page-top", "Dashboard", "⌂"),
-    ("overview", "Overview", "▦"),
-    ("members", "Members", "♙"),
-    ("fund-ledger", "Fund ledger", "▤"),
-    ("share-reminders", "Share & reminders", "↗"),
+    ("page-top", "Dashboard", "⌂", "Home"),
+    ("overview", "Overview", "▦", "Overview"),
+    ("members", "Members", "♙", "Members"),
+    ("fund-ledger", "Fund ledger", "▤", "Ledger"),
+    ("share-reminders", "Share & reminders", "↗", "Share"),
 ]
 
 def section_nav_markup() -> str:
     links = "".join(
-        f'<a href="#{anchor}"><span class="khair-nav-icon" aria-hidden="true">{icon}</span><span>{label}</span></a>'
-        for anchor, label, icon in SECTION_LINKS
+        f'<a href="#{anchor}"><span class="khair-nav-icon" aria-hidden="true">{icon}</span><span class="khair-nav-label" data-short="{short_label}">{label}</span></a>'
+        for anchor, label, icon, short_label in SECTION_LINKS
     )
     return f'<nav class="khair-top-nav" aria-label="Dashboard sections">{links}</nav>'
 
@@ -710,25 +862,57 @@ def render_infographic_summary(
 
 st.html('<span id="page-top" aria-hidden="true"></span>')
 
-st.html(
-    f"""
+with st.container(key="khair-topbar"):
+    st.html(
+            f"""
     <style>
       [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] {{ display:none !important; }}
       section.main > div {{ padding-top: 1.3rem; }}
-      [data-testid="stBaseButton-primary"] {{ background:#0F766E; border-color:#0F766E; color:#FFFFFF; }}
-      [data-testid="stBaseButton-primary"]:hover {{ background:#0B655D; border-color:#0B655D; color:#FFFFFF; }}
+      [data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primary"]:enabled {{
+        background:#0F766E !important; background-color:#0F766E !important;
+        border:1px solid #0F766E !important; color:#FFFFFF !important;
+      }}
+      [data-testid="stBaseButton-primary"]:hover {{
+        background:#0B655D !important; background-color:#0B655D !important;
+        border-color:#0B655D !important; color:#FFFFFF !important;
+      }}
+      [data-testid="stLinkButton"] a, [data-testid="stLinkButton"] button, .stLinkButton a, .stLinkButton button,
+      [data-testid="stDownloadButton"] a, [data-testid="stDownloadButton"] button, .stDownloadButton a, .stDownloadButton button {{
+        background:#0F766E !important; background-color:#0F766E !important; border:1px solid #0F766E !important; color:#FFFFFF !important;
+      }}
+      [data-testid="stLinkButton"] a:hover, [data-testid="stLinkButton"] button:hover, .stLinkButton a:hover, .stLinkButton button:hover,
+      [data-testid="stDownloadButton"] a:hover, [data-testid="stDownloadButton"] button:hover, .stDownloadButton a:hover, .stDownloadButton button:hover {{
+        background:#0B655D !important; background-color:#0B655D !important; border-color:#0B655D !important; color:#FFFFFF !important;
+      }}
       [data-testid="stBaseButton-secondary"] {{ border-color:#B8CEC5; color:#0F766E; background:#FFFFFF; }}
-      [data-testid="stAppViewContainer"] [data-testid="stElementContainer"]:has(.khair-hero) {{ position:sticky; top:3.5rem; z-index:10000; padding-top:8px; margin-bottom:12px; background:#F4F8F6; border-bottom:1px solid #D7E7DF; }}
-      .khair-hero {{ position:relative; display:flex; align-items:center; gap:18px; padding:10px 16px; margin:0;
-        border:1px solid #D7E7DF; border-top:3px solid #0F766E; border-bottom:2px solid #BFD8CD; border-radius:14px; color:#17312D;
+      .stApp h2 {{ text-align:center; }}
+      .st-key-khair-menu-row [data-testid="stButton"] button {{ background:#E1F6EF !important; background-color:#E1F6EF !important;
+        border:1px solid #BCEBD7 !important; color:#087A61 !important; }}
+      .st-key-khair-menu-row [data-testid="stButton"] button:hover {{ background:#E6F4EE !important; background-color:#E6F4EE !important;
+        border-color:#9AC8B3 !important; color:#0F766E !important; }}
+      [data-testid="stAppViewContainer"] [class*="khair-topbar"],
+      [data-testid="stAppViewContainer"] [data-testid="stVerticalBlockBorderWrapper"]:has(.khair-hero) {{
+        position:fixed !important; top:3.5rem !important; left:0 !important; right:0 !important;
+        width:100vw !important; box-sizing:border-box !important; z-index:10000 !important;
+        display:block; padding:8px 0 10px; margin:0;
+        background:#F4F8F6; border-bottom:1px solid #D7E7DF;
+      }}
+      .st-key-khair-menu-row {{ display:flex; align-items:center; width:100%; gap:8px; padding-top:8px; }}
+      .st-key-khair-menu-row [data-testid="stElementContainer"]:has(.khair-top-nav) {{ flex:1 1 0% !important; min-width:0 !important; width:auto !important; max-width:100%; }}
+      .st-key-khair-menu-row [data-testid="stElementContainer"]:has(.khair-top-nav) > div {{ width:100%; }}
+      .st-key-khair-menu-row [data-testid="stButton"], .st-key-khair-menu-row [data-testid="stToggle"] {{ flex:0 0 auto; }}
+      .st-key-khair-menu-row [data-testid="stToggle"] {{ min-width:104px; }}
+      .st-key-khair-menu-row [data-testid="stButton"] button {{ white-space:nowrap; }}
+      .st-key-khair-menu-row [data-testid="stButton"] button p {{ font-weight:700 !important; }}
+      .khair-hero {{ position:relative; display:flex; align-items:center; justify-content:center; width:100%; box-sizing:border-box; min-height:96px; gap:18px; padding:10px 16px; margin:0;
+        border:0; border-top:3px solid #0F766E; border-bottom:2px solid #BFD8CD; border-radius:0; color:#17312D;
         background:radial-gradient(ellipse at 8% 0%,#E4F5ED 0%,transparent 46%),#FFFFFF; box-shadow:0 8px 24px #123D3115; }}
-      .khair-brand-lockup {{ display:flex; align-items:center; gap:10px; flex:0 0 auto; }}
-      .khair-logo-frame {{ width:64px; height:64px; flex:0 0 64px; display:grid; place-items:center;
-        border-radius:17px; background:transparent; }}
-      .khair-logo-frame img {{ width:62px; height:62px; object-fit:contain; border-radius:15px; }}
+      .khair-brand-lockup {{ display:flex; align-items:center; justify-content:center; gap:12px; flex:0 0 auto; text-align:center; }}
+      .khair-arabic-mark {{ display:inline-grid; place-items:center; min-width:42px; height:34px; padding:0 10px; margin-left:7px;
+        border:1px solid #95D5BD; border-radius:999px; background:#E1F6EF; color:#087A61; font:700 18px/1.2 sans-serif; vertical-align:middle; }}
       .khair-brand {{ color:#17312D; font:700 29px/1.1 sans-serif; letter-spacing:-.6px; }}
       .khair-subtitle {{ margin-top:7px; color:#657871; font:500 14px/1.45 sans-serif; }}
-      .khair-top-nav {{ display:flex; align-items:center; justify-content:flex-end; gap:4px; min-width:0; margin-left:auto; overflow-x:auto; scrollbar-width:thin; }}
+      .khair-top-nav {{ display:flex; align-items:center; justify-content:center; gap:4px; min-width:0; width:100%; margin:0; overflow-x:auto; scrollbar-width:thin; }}
       .khair-top-nav a {{ display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:9px 12px; border-radius:9px;
         background:transparent; color:#455264; border:1px solid transparent; font-weight:650; white-space:nowrap; text-decoration:none;
         transition:background .18s ease, color .18s ease, border-color .18s ease; }}
@@ -773,37 +957,34 @@ st.html(
       @keyframes khair-heading-sweep {{ from {{ transform:translateX(-110%); }} to {{ transform:translateX(520%); }} }}
       @media (prefers-reduced-motion: reduce) {{ .khair-heading-accent span {{ animation:none; }} }}
       [data-testid="stAppViewContainer"] #members, [data-testid="stAppViewContainer"] #fund-ledger,
-      [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview {{ scroll-margin-top:164px; }}
-      @media(max-width:900px) {{ .khair-hero {{ flex-wrap:wrap; gap:8px; }} .khair-top-nav {{ order:2; width:100%; justify-content:flex-start; margin-left:0; }} }}
-      @media(max-width:620px) {{ .khair-hero {{ padding:9px 11px; gap:7px; }} .khair-logo-frame {{ width:48px;height:48px;flex-basis:48px; }}
-        .khair-logo-frame img {{ width:46px;height:46px; }} .khair-brand {{ font-size:23px; }} .khair-subtitle {{ font-size:12px; }}
-        .khair-top-nav a {{ padding:8px 10px; font-size:13px; }}
-        [data-testid="stAppViewContainer"] [data-testid="stElementContainer"]:has(.khair-hero) {{ top:3.5rem; }}
+      [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview {{ scroll-margin-top:240px; }}
+      @media(max-width:900px) {{ .khair-top-nav {{ justify-content:space-between; gap:0; overflow:hidden; }} .khair-top-nav a {{ padding:7px 5px; gap:0; font-size:10px; }} .khair-nav-icon {{ display:none; }}
+        .khair-nav-label {{ font-size:0; }} .khair-nav-label::after {{ content:attr(data-short); display:inline; font-size:10px; }} }}
+      @media(max-width:620px) {{ .khair-hero {{ padding:9px 11px; gap:7px; }}
+        .khair-brand {{ font-size:23px; }} .khair-subtitle {{ font-size:12px; }} .khair-arabic-mark {{ min-width:34px; height:29px; font-size:16px; }}
+        .st-key-khair-menu-row {{ gap:4px; }} .khair-top-nav a {{ padding:6px 4px; }}
+        .st-key-khair-menu-row [data-testid="stButton"] button {{ padding:6px 8px; font-size:11px; }} .st-key-khair-menu-row [data-testid="stToggle"] {{ min-width:92px; }}
+        [data-testid="stAppViewContainer"] [class*="khair-topbar"],
+        [data-testid="stAppViewContainer"] [data-testid="stVerticalBlockBorderWrapper"]:has(.khair-hero) {{ top:3.5rem !important; }}
         [data-testid="stAppViewContainer"] #members, [data-testid="stAppViewContainer"] #fund-ledger,
-        [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview {{ scroll-margin-top:220px; }} }}
+        [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview {{ scroll-margin-top:240px; }} }}
       {dark_overrides}
     </style>
     <header class="khair-hero" aria-label="Khair group fund dashboard">
       <div class="khair-brand-lockup">
-        <div class="khair-logo-frame">{'<img alt="Khair logo" src="data:image/png;base64,' + logo_data + '">' if logo_data else '<span style="font-size:34px;font-weight:bold">خ</span>'}</div>
-        <div><div class="khair-brand">Khair <span style="color:#55dfbd">·</span></div>
+        <div><div class="khair-brand">Khair <span class="khair-arabic-mark" lang="ar" dir="rtl">خير</span></div>
           <div class="khair-subtitle">Group Fund &amp; Investment Portal</div>
         </div>
       </div>
-      {section_nav_markup()}
     </header>
-    """
-)
+        """
+    )
+    with st.container(key="khair-menu-row", horizontal=True, wrap=False, horizontal_alignment="center", vertical_alignment="center", gap="small"):
+        st.html(section_nav_markup())
+        refresh_clicked = st.button("Refresh", icon=":material/refresh:", type="secondary", help="Refresh sheet and gold rate")
+        dark_mode_toggle = st.toggle("Dark mode", value=dark_mode, key="khair_dark_mode")
 
-with st.container(
-    horizontal=True,
-    horizontal_alignment="distribute",
-    vertical_alignment="center",
-    wrap=True,
-):
-    st.caption("Live overview · Khair members and fund")
-    refresh_clicked = st.button("Refresh data", icon=":material/refresh:", type="primary")
-    dark_mode_toggle = st.toggle("Dark mode", value=dark_mode, key="khair_dark_mode")
+st.html('<div aria-hidden="true" style="height:240px"></div>')
 
 st.html(
     f"""
@@ -881,7 +1062,52 @@ gold_total_cost = sum(item["Cost"] for item in positions)
 gold_total_value = sum(item["Value"] for item in positions)
 gold_total_pnl = sum(item["P/L"] for item in positions)
 
-st.subheader("Your fund, at a glance")
+latest_update_items = [
+    ("💰", "Total contributions", money(collected_ledger)),
+    ("📅", f"{month_label(selected_month)} collected", money(selected_collection)),
+    ("👥", "Members paid", f"{paid_this_month} / {member_count}"),
+    ("⏳", f"Current outstanding · {due_this_month} members", money(due_amount)),
+    ("🏦", "Total fund outstanding", money(total_outstanding) if total_outstanding is not None else "Not listed"),
+    ("💼", "Fund balance", money(balance) if balance is not None else "Not listed"),
+    ("🪙", "Gold profit / loss", money(gold_total_pnl)),
+]
+latest_update_content = "".join(
+    f'<span class="khair-ticker-item"><span class="khair-ticker-icon" aria-hidden="true">{icon}</span>'
+    f'<strong>{escape(label)}:</strong> {escape(value)}</span>'
+    for icon, label, value in latest_update_items
+)
+st.html(
+    f"""
+    <style>
+      .khair-latest-ticker {{ position:fixed; top:216px; left:0; right:0; z-index:9999; display:flex; align-items:center;
+        height:40px; overflow:hidden; border-bottom:1px solid #B9D9CB; background:linear-gradient(90deg,#E4F4EC,#F7FBF9 50%,#E4F4EC);
+        color:#17312D; box-shadow:0 5px 14px #123D310D; }}
+      .khair-ticker-label {{ position:relative; z-index:1; display:flex; align-items:center; align-self:stretch; flex:0 0 auto; gap:7px;
+        padding:0 14px; background:#0F766E; color:#FFFFFF; font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }}
+      .khair-ticker-viewport {{ flex:1; min-width:0; overflow:hidden; }}
+      .khair-ticker-track {{ display:flex; width:max-content; animation:khair-ticker-scroll 38s linear infinite; }}
+      .khair-latest-ticker:hover .khair-ticker-track {{ animation-play-state:paused; }}
+      .khair-ticker-group {{ display:flex; flex:0 0 auto; align-items:center; gap:28px; padding-left:22px; padding-right:28px; white-space:nowrap; }}
+      .khair-ticker-item {{ display:inline-flex; align-items:center; gap:5px; color:#415D55; font-size:12px; }}
+      .khair-ticker-item strong {{ color:#17312D; font-weight:750; }}
+      .khair-ticker-icon {{ font-size:14px; }}
+      @keyframes khair-ticker-scroll {{ to {{ transform:translateX(-50%); }} }}
+      @media(max-width:620px) {{ .khair-latest-ticker {{ top:216px; height:36px; }} .khair-ticker-label {{ padding:0 9px; font-size:9px; }}
+        .khair-ticker-group {{ gap:18px; }} .khair-ticker-item {{ font-size:11px; }} }}
+      @media(prefers-reduced-motion:reduce) {{ .khair-ticker-track {{ animation:none; transform:none; }} .khair-ticker-group[aria-hidden="true"] {{ display:none; }} }}
+      {'.khair-latest-ticker{background:linear-gradient(90deg,#103B37,#173941 50%,#103B37);border-color:#2D7465;color:#F2FBF7}.khair-ticker-label{background:#19A88A;color:#071A18}.khair-ticker-item,.khair-ticker-item strong{color:#E0ECE8}' if dark_mode else ''}
+    </style>
+    <div class="khair-latest-ticker" role="region" aria-label="Latest fund update">
+      <div class="khair-ticker-label"><span aria-hidden="true">✦</span> Latest Update</div>
+      <div class="khair-ticker-viewport"><div class="khair-ticker-track">
+        <div class="khair-ticker-group">{latest_update_content}</div>
+        <div class="khair-ticker-group" aria-hidden="true">{latest_update_content}</div>
+      </div></div>
+    </div>
+    """
+)
+
+st.header(":material/dashboard: Dashboard", anchor="dashboard")
 st.caption(
     f"Connected to Google Sheets · refreshed "
     f"{data['loaded_at'].strftime('%d %b %Y at %H:%M')}"
@@ -1063,6 +1289,103 @@ with st.container():
                 alt="The eight members with the most unpaid months through the selected month",
             )
 
+    overview_metrics = [
+        ("Fund collected", money(collected_ledger)),
+        ("Month collected", money(selected_collection)),
+        ("Current month outstanding", money(due_amount)),
+        ("Gold P/L", money(gold_total_pnl)),
+    ]
+    overview_tables = [
+        ("Collection trend", ["Month", "Collected (BHD)", "Expected (BHD)", "Paid members"], report_dataframe_rows(
+            monthly.assign(Month=monthly["Month"].map(month_label))[["Month", "Collected (BHD)", "Expected (BHD)", "Paid members"]]
+        )),
+        ("Gold portfolio", ["Holding", "Weight (g)", "Cost (BHD)", "Value (BHD)", "P/L (BHD)"], [
+            [position["Holding"], f'{position["Weight"]:g}', f'{position["Cost"]:,.2f}', f'{position["Value"]:,.2f}', f'{position["P/L"]:+,.2f}']
+            for position in positions
+        ] or [["Live position unavailable", "—", "—", "—", "—"]]),
+        ("Most pending members", ["Name", "Unpaid months", "Outstanding (BHD)"], report_dataframe_rows(
+            most_pending[["Name", "Unpaid months", "Amount outstanding (BHD)"]].rename(columns={"Amount outstanding (BHD)": "Outstanding (BHD)"})
+        )),
+    ]
+    report_chart = [
+        (month_label(row["Month"]), float(row["Collected (BHD)"]), float(row["Expected (BHD)"]))
+        for _, row in monthly.iterrows()
+    ]
+    st.download_button(
+        "Download overview report (PDF)",
+        data=build_section_pdf("Overview report", selected_month, overview_metrics, overview_tables, data["loaded_at"], report_chart),
+        file_name=f"khair-overview-{selected_month.lower()}.pdf",
+        mime="application/pdf",
+        icon=":material/picture_as_pdf:",
+    )
+
+    all_member_report = members[["Name", "Registration fee", "Paid months", "Monthly contributions"]].copy()
+    all_member_report["Unpaid months"] = unpaid_counts.values
+    all_member_report["Pending month names"] = [
+        ", ".join(month_label(month) for month in months_to_date if float(member[month]) <= 0) or "None"
+        for _, member in members.iterrows()
+    ]
+    all_member_report["Paid month names"] = [
+        ", ".join(month_label(month) for month in months_to_date if float(member[month]) > 0) or "None"
+        for _, member in members.iterrows()
+    ]
+    all_member_report["Amount outstanding (BHD)"] = unpaid_counts.values * fee
+    all_member_report = all_member_report.rename(columns={
+        "Registration fee": "Registration (BHD)",
+        "Monthly contributions": "Contributed (BHD)",
+    })
+    complete_gold_rows = [
+        [position["Holding"], f'{position["Weight"]:g}', f'{position["Purchase rate"]:,.2f}',
+         f'{position["Rate"]:,.2f}', f'{position["Cost"]:,.2f}', f'{position["Value"]:,.2f}',
+         f'{position["P/L"]:+,.2f}']
+        for position in positions
+    ] or [["Live gold rate unavailable", "—", "—", "—", "—", "—", "—"]]
+    complete_ledger_rows = [
+        [label, money(data["ledger"][key]) if data["ledger"].get(key) is not None else "Not listed"]
+        for label, key in [
+            ("Balance", "balance"), ("Total collection", "total collection"),
+            ("Total outstanding", "total outstanding"), ("Registration fees", "reg. fee"),
+            ("Meeting expenses", "meeting exp."), ("Gold", "gold"),
+            ("Kuri", "kuri"), ("Rounding", "rounding"),
+        ]
+    ]
+    complete_monthly_view = monthly.assign(Month=monthly["Month"].map(month_label))
+    complete_pending_rows = []
+    for member_index, member in members.iterrows():
+        member_unpaid_months = [month for month in months_to_date if float(member[month]) <= 0]
+        if member_unpaid_months:
+            complete_pending_rows.append([
+                str(member["Name"]), str(len(member_unpaid_months)),
+                ", ".join(month_label(month) for month in member_unpaid_months),
+                money(len(member_unpaid_months) * fee),
+            ])
+    complete_pending_rows.sort(key=lambda row: (-int(row[1]), row[0].lower()))
+    if not complete_pending_rows:
+        complete_pending_rows = [["No pending members", "0", "—", money(0)]]
+    complete_report_tables = [
+        ("All member contribution details through " + month_label(selected_month),
+         list(all_member_report.columns), report_dataframe_rows(all_member_report)),
+        ("Gold holdings and profit or loss",
+         ["Holding", "Weight (g)", "Purchase/g", "Live rate/g", "Cost (BHD)", "Value (BHD)", "P/L (BHD)"], complete_gold_rows),
+        ("Fund ledger", ["Fund item", "Amount"], complete_ledger_rows),
+        ("Monthly collections and target", list(complete_monthly_view.columns), report_dataframe_rows(complete_monthly_view)),
+        ("Pending members", ["Member", "Months", "Pending month names", "Amount due"], complete_pending_rows),
+        ("Shared payment details", ["Item", "Value"], [["IBAN No", data.get("iban_no", "") or "Not listed"], ["Monthly contribution fee", money(fee)]]),
+    ]
+    st.download_button(
+        "Download full dashboard report (PDF)",
+        data=build_section_pdf(
+            "Full dashboard report", selected_month,
+            [("Total contributions", money(collected_ledger)), ("Month collected", money(selected_collection)),
+             ("Total outstanding", money(total_outstanding) if total_outstanding is not None else "Not listed"),
+             ("Gold P/L", money(gold_total_pnl))],
+            complete_report_tables, data["loaded_at"], report_chart,
+        ),
+        file_name=f"khair-full-dashboard-{selected_month.lower()}.pdf",
+        mime="application/pdf",
+        icon=":material/picture_as_pdf:",
+    )
+
 with st.container():
     st.header(":material/groups: Members", anchor="members")
     render_section_accent()
@@ -1130,6 +1453,20 @@ with st.container():
             matrix[month] = matrix[month].map(lambda amount: "✓" if amount > 0 else "—")
         st.dataframe(matrix, hide_index=True, alt="Full member payment history by month")
 
+    st.download_button(
+        "Download members report (PDF)",
+        data=build_section_pdf(
+            "Member payments", member_month,
+            [("Members shown", f"{len(view)} of {member_count}"), ("Paid this month", str(int((members[member_month] > 0).sum()))),
+             ("Pending this month", str(int((members[member_month] <= 0).sum()))), ("Monthly fee", money(fee))],
+            [("Payment status · " + month_label(member_month), list(view.columns), report_dataframe_rows(view))],
+            data["loaded_at"],
+        ),
+        file_name=f"khair-members-{member_month.lower()}.pdf",
+        mime="application/pdf",
+        icon=":material/picture_as_pdf:",
+    )
+
 with st.container():
     st.header(":material/account_balance_wallet: Fund ledger", anchor="fund-ledger")
     render_section_accent()
@@ -1166,6 +1503,21 @@ with st.container():
             "Expected (BHD)": st.column_config.NumberColumn(format="%.2f"),
         },
         alt="Monthly contribution totals and expected target",
+    )
+    ledger_rows = [[label, money(ledger[key]) if ledger.get(key) is not None else "Not listed"] for label, key in ledger_items]
+    st.download_button(
+        "Download fund ledger report (PDF)",
+        data=build_section_pdf(
+            "Fund ledger", selected_month,
+            [("Fund balance", money(balance) if balance is not None else "Not listed"),
+             ("Total collected", money(collected_ledger)), ("Total outstanding", money(total_outstanding) if total_outstanding is not None else "Not listed")],
+            [("Ledger balances", ["Fund item", "Amount"], ledger_rows),
+             ("Monthly totals", list(monthly_view.columns), report_dataframe_rows(monthly_view))],
+            data["loaded_at"],
+        ),
+        file_name=f"khair-fund-ledger-{selected_month.lower()}.pdf",
+        mime="application/pdf",
+        icon=":material/picture_as_pdf:",
     )
 
 with st.container():
@@ -1454,5 +1806,36 @@ with st.container():
                 )
             else:
                 st.caption("Select at least one member to prepare the email draft.")
+
+    share_pending_rows = [
+        [detail["name"], str(detail["month_count"]), ", ".join(detail["months"]), money(detail["amount"])]
+        for detail in pending_details
+    ]
+    if not share_pending_rows:
+        share_pending_rows = [["No pending members", "0", "—", money(0)]]
+    share_metrics = [
+        ("Members pending", str(len(pending_details))),
+        ("Outstanding this month", money(due_amount)),
+        ("Total fund outstanding", money(total_outstanding) if total_outstanding is not None else "Not listed"),
+        ("Gold P/L", money(gold_total_pnl)),
+    ]
+    share_tables = [
+        ("Pending contributions through " + month_label(selected_month),
+         ["Member", "Months", "Pending months", "Amount due"], share_pending_rows),
+        ("Group summary", ["Item", "Current value"], [
+            ["Total contributions", money(collected_ledger)],
+            ["Current month collected", money(selected_collection)],
+            ["Paid members this month", f"{paid_this_month} of {member_count}"],
+            ["Fund balance", money(balance) if balance is not None else "Not listed"],
+            ["Shared IBAN", common_iban or "Not listed"],
+        ]),
+    ]
+    st.download_button(
+        "Download share & reminders report (PDF)",
+        data=build_section_pdf("Share & reminders", selected_month, share_metrics, share_tables, data["loaded_at"]),
+        file_name=f"khair-reminders-{selected_month.lower()}.pdf",
+        mime="application/pdf",
+        icon=":material/picture_as_pdf:",
+    )
 
 st.caption("Khair · Group fund dashboard · Read-only connection")
