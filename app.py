@@ -798,7 +798,7 @@ dark_overrides = """
 """ if dark_mode else ""
 
 SECTION_LINKS = [
-    ("page-top", "Dashboard", "⌂", "Home"),
+    ("dashboard", "Dashboard", "⌂", "Home"),
     ("overview", "Overview", "▦", "Overview"),
     ("share-reminders", "Reminder", "↗", "Reminder"),
     ("fund-ledger", "Fund ledger", "▤", "Ledger"),
@@ -816,7 +816,7 @@ def section_nav_markup() -> str:
   const nav = document.currentScript.previousElementSibling;
   if (!nav) return;
   const update = () => {{
-    const current = window.location.hash || "#page-top";
+    const current = window.location.hash || "#dashboard";
     nav.querySelectorAll("a").forEach(link => {{
       const active = link.getAttribute("href") === current;
       link.classList.toggle("active", active);
@@ -974,8 +974,8 @@ with st.container(key="khair-topbar"):
       @media(max-width:480px) {{ .khair-infographic-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }} .khair-infographic-card {{ min-height:120px; padding:13px; }} .khair-infographic-value {{ font-size:21px; }} }}
       @keyframes khair-heading-sweep {{ from {{ transform:translateX(-110%); }} to {{ transform:translateX(520%); }} }}
       @media (prefers-reduced-motion: reduce) {{ .khair-heading-accent span {{ animation:none; }} }}
-      [data-testid="stAppViewContainer"] #members, [data-testid="stAppViewContainer"] #fund-ledger,
-      [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview {{ scroll-margin-top:240px; }}
+      [data-testid="stAppViewContainer"] #dashboard, [data-testid="stAppViewContainer"] #members, [data-testid="stAppViewContainer"] #fund-ledger,
+      [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview {{ scroll-margin-top:280px; }}
       @media(max-width:900px) {{ .khair-top-nav {{ justify-content:space-between; gap:0; overflow:hidden; }} .khair-top-nav a {{ padding:7px 5px; gap:0; font-size:10px; }} .khair-nav-icon {{ display:none; }}
         .khair-nav-label {{ font-size:0; }} .khair-nav-label::after {{ content:attr(data-short); display:inline; font-size:10px; }} }}
       @media(max-width:620px) {{ .khair-hero {{ padding:9px 11px; gap:7px; }}
@@ -984,8 +984,8 @@ with st.container(key="khair-topbar"):
         .st-key-khair-menu-row [data-testid="stButton"] button {{ padding:6px 8px; font-size:11px; }} .st-key-khair-menu-row [data-testid="stToggle"] {{ min-width:92px; }}
         [data-testid="stAppViewContainer"] [class*="khair-topbar"],
         [data-testid="stAppViewContainer"] [data-testid="stVerticalBlockBorderWrapper"]:has(.khair-hero) {{ top:3.5rem !important; }}
-        [data-testid="stAppViewContainer"] #members, [data-testid="stAppViewContainer"] #fund-ledger,
-        [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview {{ scroll-margin-top:240px; }} }}
+        [data-testid="stAppViewContainer"] #dashboard, [data-testid="stAppViewContainer"] #members, [data-testid="stAppViewContainer"] #fund-ledger,
+        [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview {{ scroll-margin-top:280px; }} }}
       {dark_overrides}
     </style>
     <header class="khair-hero" aria-label="Khair group fund dashboard">
@@ -1002,20 +1002,7 @@ with st.container(key="khair-topbar"):
         refresh_clicked = st.button("Refresh", icon=":material/refresh:", type="secondary", help="Refresh sheet and gold rate")
         dark_mode_toggle = st.toggle("Dark mode", value=dark_mode, key="khair_dark_mode")
 
-st.html('<div aria-hidden="true" style="height:240px"></div>')
-
-st.html(
-    f"""
-    <style>
-    @keyframes khair-sweep {{ from {{ transform: translateX(-115%); }} to {{ transform: translateX(430%); }} }}
-    .khair-motion {{ height: 4px; width: 100%; overflow: hidden; border-radius: 8px; background: {motion_bg}; }}
-    .khair-motion::after {{ content: ""; display: block; height: 100%; width: 24%; border-radius: inherit;
-      background: {motion_gradient}; animation: khair-sweep 8s ease-in-out infinite; }}
-    @media (prefers-reduced-motion: reduce) {{ .khair-motion::after {{ animation: none; width: 100%; opacity: .55; }} }}
-    </style>
-    <div class="khair-motion" aria-hidden="true"></div>
-    """
-)
+st.html('<div aria-hidden="true" style="height:155px"></div>')
 
 load_if_needed(force=refresh_clicked)
 data = st.session_state.get("khair_data")
@@ -1037,6 +1024,13 @@ months: list[str] = data["months"]
 monthly: pd.DataFrame = data["monthly"]
 ledger: dict[str, float] = data["ledger"]
 fee: float = data["monthly_fee"]
+
+st.header(":material/dashboard: Dashboard", anchor="dashboard")
+render_section_accent()
+st.caption(
+    f"Connected to Google Sheets · refreshed "
+    f"{data['loaded_at'].strftime('%d %b %Y at %H:%M')}"
+)
 
 latest_month = months[-1]
 with st.container(border=True):
@@ -1137,11 +1131,6 @@ st.html(
     """
 )
 
-st.header(":material/dashboard: Dashboard", anchor="dashboard")
-st.caption(
-    f"Connected to Google Sheets · refreshed "
-    f"{data['loaded_at'].strftime('%d %b %Y at %H:%M')}"
-)
 render_infographic_summary(
     total=collected_ledger,
     monthly_total=selected_collection,
