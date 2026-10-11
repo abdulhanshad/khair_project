@@ -776,7 +776,7 @@ dark_overrides = """
   .khair-arabic-mark { background:#0B3D36; color:#51DDB5; border-color:#146956; }
   .khair-subtitle { color:#B9CBC9; }
   .khair-top-nav a { color:#CBD8D5; }
-  .khair-top-nav a:first-child, .khair-top-nav a:focus { background:#0B3D36; color:#51DDB5; border-color:#146956; }
+  .khair-top-nav a.active, .khair-top-nav a:focus { background:#0B3D36; color:#51DDB5; border-color:#146956; }
   .khair-top-nav a:hover { background:#1B3A3E; border-color:#38D6AD; color:#F2FBF7; }
   [data-testid="stAppViewContainer"] [class*="khair-topbar"],
   [data-testid="stAppViewContainer"] [data-testid="stVerticalBlockBorderWrapper"]:has(.khair-hero) { background:#0D1822; border-bottom:1px solid #29454C; }
@@ -810,7 +810,24 @@ def section_nav_markup() -> str:
         f'<a href="#{anchor}"><span class="khair-nav-icon" aria-hidden="true">{icon}</span><span class="khair-nav-label" data-short="{short_label}">{label}</span></a>'
         for anchor, label, icon, short_label in SECTION_LINKS
     )
-    return f'<nav class="khair-top-nav" aria-label="Dashboard sections">{links}</nav>'
+    return f'''<nav class="khair-top-nav" aria-label="Dashboard sections">{links}</nav>
+<script>
+(() => {{
+  const nav = document.currentScript.previousElementSibling;
+  if (!nav) return;
+  const update = () => {{
+    const current = window.location.hash || "#page-top";
+    nav.querySelectorAll("a").forEach(link => {{
+      const active = link.getAttribute("href") === current;
+      link.classList.toggle("active", active);
+      if (active) link.setAttribute("aria-current", "page");
+      else link.removeAttribute("aria-current");
+    }});
+  }};
+  update();
+  window.addEventListener("hashchange", update);
+}})();
+</script>'''
 
 
 def render_section_accent() -> None:
@@ -916,7 +933,7 @@ with st.container(key="khair-topbar"):
       .khair-top-nav a {{ display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:9px 12px; border-radius:9px;
         background:transparent; color:#455264; border:1px solid transparent; font-weight:650; white-space:nowrap; text-decoration:none;
         transition:background .18s ease, color .18s ease, border-color .18s ease; }}
-      .khair-top-nav a:first-child, .khair-top-nav a:focus {{ background:#E1F6EF; color:#087A61; border-color:#BCEBD7; outline:none; }}
+      .khair-top-nav a.active, .khair-top-nav a:focus {{ background:#E1F6EF; color:#087A61; border-color:#BCEBD7; outline:none; }}
       .khair-top-nav a:hover {{ background:#E6F4EE; color:#0F766E; border-color:#9AC8B3; }}
       .khair-nav-icon {{ display:inline-grid; place-items:center; min-width:20px; height:20px; color:currentColor; font-size:15px; }}
       .khair-heading-accent {{ width:100%; height:3px; margin:-13px 0 22px; overflow:hidden; border-radius:5px;
@@ -1080,8 +1097,10 @@ st.html(
     f"""
     <style>
       .khair-latest-ticker {{ position:fixed; top:216px; left:0; right:0; z-index:9999; display:flex; align-items:center;
-        height:40px; overflow:hidden; border-bottom:1px solid #B9D9CB; background:linear-gradient(90deg,#E4F4EC,#F7FBF9 50%,#E4F4EC);
-        color:#17312D; box-shadow:0 5px 14px #123D310D; }}
+        height:40px; overflow:visible; border-bottom:1px solid #B9D9CB; background:linear-gradient(90deg,#E4F4EC,#F7FBF9 50%,#E4F4EC);
+        color:#17312D; box-shadow:0 5px 14px #123D310D; --ticker-fade-color:#F7FBF9; }}
+      .khair-latest-ticker::after {{ content:""; position:absolute; z-index:2; top:100%; left:0; right:0; height:22px;
+        background:linear-gradient(to bottom,var(--ticker-fade-color),transparent); pointer-events:none; }}
       .khair-ticker-label {{ position:relative; z-index:1; display:flex; align-items:center; align-self:stretch; flex:0 0 auto; gap:7px;
         padding:0 14px; background:#0F766E; color:#FFFFFF; font-size:11px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }}
       .khair-ticker-viewport {{ flex:1; min-width:0; overflow:hidden; }}
@@ -1095,7 +1114,7 @@ st.html(
       @media(max-width:620px) {{ .khair-latest-ticker {{ top:216px; height:36px; }} .khair-ticker-label {{ padding:0 9px; font-size:9px; }}
         .khair-ticker-group {{ gap:18px; }} .khair-ticker-item {{ font-size:11px; }} }}
       @media(prefers-reduced-motion:reduce) {{ .khair-ticker-track {{ animation:none; transform:none; }} .khair-ticker-group[aria-hidden="true"] {{ display:none; }} }}
-      {'.khair-latest-ticker{background:linear-gradient(90deg,#103B37,#173941 50%,#103B37);border-color:#2D7465;color:#F2FBF7}.khair-ticker-label{background:#19A88A;color:#071A18}.khair-ticker-item,.khair-ticker-item strong{color:#E0ECE8}' if dark_mode else ''}
+      {'.khair-latest-ticker{background:linear-gradient(90deg,#103B37,#173941 50%,#103B37);border-color:#2D7465;color:#F2FBF7;--ticker-fade-color:#0D1822}.khair-ticker-label{background:#19A88A;color:#071A18}.khair-ticker-item,.khair-ticker-item strong{color:#E0ECE8}' if dark_mode else ''}
     </style>
     <div class="khair-latest-ticker" role="region" aria-label="Latest fund update">
       <div class="khair-ticker-label"><span aria-hidden="true">✦</span> Latest Update</div>
@@ -1104,6 +1123,16 @@ st.html(
         <div class="khair-ticker-group" aria-hidden="true">{latest_update_content}</div>
       </div></div>
     </div>
+    """
+)
+
+st.html('<div class="khair-ticker-clearance" aria-hidden="true"></div>')
+st.html(
+    """
+    <style>
+      .khair-ticker-clearance { height:24px; }
+      @media(max-width:620px) { .khair-ticker-clearance { height:18px; } }
+    </style>
     """
 )
 
@@ -1521,7 +1550,7 @@ with st.container():
     )
 
 with st.container():
-    st.header(":material/campaign: Share & reminders", anchor="share-reminders")
+    st.header(":material/campaign: Reminder", anchor="share-reminders")
     render_section_accent()
     st.subheader("Share a group update")
     if not data["has_iban_value"]:
@@ -1530,21 +1559,12 @@ with st.container():
         "Share a clear text update or a branded infographic. Image sharing opens your device’s share menu, "
         "where you can choose WhatsApp; you can also download the image."
     )
-    share_format = st.segmented_control(
-        "Share format",
-        ["Text", "Image"],
-        default="Text",
-        selection_mode="single",
-    )
-    image_appearance = st.segmented_control(
-        "WhatsApp image theme",
-        ["Dark", "Light"],
-        default="Dark",
-        selection_mode="single",
-        key="whatsapp_image_appearance",
-    )
-    share_col, share_options = st.columns([1.45, 1], gap="large")
-    with share_options:
+    with st.container(horizontal=True, wrap=True, gap="medium"):
+        share_as_image = st.toggle("Share as image", value=False, key="share_as_image")
+        use_dark_image = st.toggle("Dark image theme", value=False, key="whatsapp_image_dark")
+    share_format = "Image" if share_as_image else "Text"
+    image_appearance = "Dark" if use_dark_image else "Light"
+    with st.container(horizontal=True, wrap=True, gap="medium"):
         include_gold = st.checkbox("Include gold profit / loss", value=True)
         include_pending_names = st.checkbox("Include pending names and months", value=True)
 
@@ -1618,7 +1638,7 @@ with st.container():
     summary_lines.extend(["", "Thanks and Regards,", "Khair Group Fund"])
     summary_text = "\n".join(summary_lines)
 
-    with share_col:
+    with st.container():
         if share_format == "Text":
             message = st.text_area(
                 "Message preview · edit before opening WhatsApp",
@@ -1831,8 +1851,8 @@ with st.container():
         ]),
     ]
     st.download_button(
-        "Download share & reminders report (PDF)",
-        data=build_section_pdf("Share & reminders", selected_month, share_metrics, share_tables, data["loaded_at"]),
+        "Download reminder report (PDF)",
+        data=build_section_pdf("Reminder", selected_month, share_metrics, share_tables, data["loaded_at"]),
         file_name=f"khair-reminders-{selected_month.lower()}.pdf",
         mime="application/pdf",
         icon=":material/picture_as_pdf:",
