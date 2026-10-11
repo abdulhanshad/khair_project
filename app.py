@@ -800,9 +800,9 @@ dark_overrides = """
 SECTION_LINKS = [
     ("page-top", "Dashboard", "⌂", "Home"),
     ("overview", "Overview", "▦", "Overview"),
-    ("members", "Members", "♙", "Members"),
+    ("share-reminders", "Reminder", "↗", "Reminder"),
     ("fund-ledger", "Fund ledger", "▤", "Ledger"),
-    ("share-reminders", "Share & reminders", "↗", "Share"),
+    ("members", "Members", "♙", "Members"),
 ]
 
 def section_nav_markup() -> str:
