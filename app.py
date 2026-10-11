@@ -938,8 +938,9 @@ with st.container(key="khair-topbar"):
       .khair-nav-icon {{ display:inline-grid; place-items:center; min-width:20px; height:20px; color:currentColor; font-size:15px; }}
       .khair-heading-accent {{ width:100%; height:3px; margin:-13px 0 22px; overflow:hidden; border-radius:5px;
         background:linear-gradient(90deg,#C8E5D7,#E8D6A7,#C8E5D7); }}
-      .khair-heading-accent span {{ display:block; height:100%; width:22%; border-radius:inherit;
-        background:linear-gradient(90deg,#0F766E,#41DAAB,#D8B45C); animation:khair-heading-sweep 6s ease-in-out infinite; }}
+      .khair-heading-accent span {{ display:block; height:100%; width:22%; border-radius:inherit; opacity:.48;
+        background:linear-gradient(90deg,transparent 0%,#0F766E 22%,#41DAAB 52%,#D8B45C 78%,transparent 100%);
+        animation:khair-heading-sweep 8s ease-in-out infinite; }}
       .khair-infographic-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:14px; margin:14px 0; }}
       .khair-infographic-card {{ position:relative; min-height:132px; padding:17px 18px 15px; overflow:hidden;
         border:1px solid #D7E7DF; border-radius:18px; background:#FFFFFF; color:#17312D;
