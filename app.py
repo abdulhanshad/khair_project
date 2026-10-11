@@ -624,9 +624,11 @@ dark_overrides = """
   .khair-hero { background:radial-gradient(ellipse at 8% 0%,#145448 0%,transparent 38%),linear-gradient(115deg,#10222D 0%,#16323B 64%,#0D3D36 100%); color:#F2FBF7; border-color:#27564F; }
   .khair-brand { color:#F2FBF7; }
   .khair-subtitle { color:#B9CBC9; }
-  .khair-section-nav--footer { border-top-color:#29454C; }
-  .khair-section-nav a { background:#142630; color:#DDF3E8; border-color:#29454C; }
-  .khair-section-nav a:hover { background:#1B3A3E; border-color:#38D6AD; }
+  .khair-top-nav a { color:#CBD8D5; }
+  .khair-top-nav a:first-child, .khair-top-nav a:focus { background:#0B3D36; color:#51DDB5; border-color:#146956; }
+  .khair-top-nav a:hover { background:#1B3A3E; border-color:#38D6AD; color:#F2FBF7; }
+  [data-testid="stAppViewContainer"] [data-testid="stElementContainer"]:has(.khair-hero) { background:#0D1822; border-bottom:1px solid #29454C; }
+  .khair-hero { background:#101D28; border-bottom:2px solid #315D56; }
   .khair-nav-icon { background:#1D4A42; color:#B8F2DD; }
   .khair-heading-accent { background:linear-gradient(90deg,#26444A,#315D56,#26444A); }
   .khair-infographic-card { background:#142630; border-color:#29454C; color:#F2FBF7; }
@@ -644,20 +646,19 @@ dark_overrides = """
 """ if dark_mode else ""
 
 SECTION_LINKS = [
-    ("overview", "Overview", "◈"),
+    ("page-top", "Dashboard", "⌂"),
+    ("overview", "Overview", "▦"),
     ("members", "Members", "♙"),
-    ("fund-ledger", "Fund ledger", "◉"),
+    ("fund-ledger", "Fund ledger", "▤"),
     ("share-reminders", "Share & reminders", "↗"),
 ]
 
-
-def render_section_nav(*, footer: bool = False) -> None:
-    nav_class = "khair-section-nav khair-section-nav--footer" if footer else "khair-section-nav"
+def section_nav_markup() -> str:
     links = "".join(
-        f'<a href="#{anchor}"><span class="khair-nav-icon" aria-hidden="true">{icon}</span>{label}</a>'
+        f'<a href="#{anchor}"><span class="khair-nav-icon" aria-hidden="true">{icon}</span><span>{label}</span></a>'
         for anchor, label, icon in SECTION_LINKS
     )
-    st.html(f'<nav class="{nav_class}" aria-label="Dashboard sections">{links}</nav>')
+    return f'<nav class="khair-top-nav" aria-label="Dashboard sections">{links}</nav>'
 
 
 def render_section_accent() -> None:
@@ -707,6 +708,8 @@ def render_infographic_summary(
         f'style="width:{completion_pct}%"></div></div></div></div></section>'
     )
 
+st.html('<span id="page-top" aria-hidden="true"></span>')
+
 st.html(
     f"""
     <style>
@@ -715,26 +718,23 @@ st.html(
       [data-testid="stBaseButton-primary"] {{ background:#0F766E; border-color:#0F766E; color:#FFFFFF; }}
       [data-testid="stBaseButton-primary"]:hover {{ background:#0B655D; border-color:#0B655D; color:#FFFFFF; }}
       [data-testid="stBaseButton-secondary"] {{ border-color:#B8CEC5; color:#0F766E; background:#FFFFFF; }}
-      .khair-hero {{ display:flex; align-items:center; gap:16px; padding:17px 22px; margin-bottom:12px;
-        border:1px solid #D7E7DF; border-top:3px solid #0F766E; border-radius:20px; color:#17312D;
-        background:radial-gradient(ellipse at 8% 0%,#E4F5ED 0%,transparent 46%),#FFFFFF; box-shadow:0 10px 28px #123D3110; }}
+      [data-testid="stAppViewContainer"] [data-testid="stElementContainer"]:has(.khair-hero) {{ position:sticky; top:3.5rem; z-index:10000; padding-top:8px; margin-bottom:12px; background:#F4F8F6; border-bottom:1px solid #D7E7DF; }}
+      .khair-hero {{ position:relative; display:flex; align-items:center; gap:18px; padding:10px 16px; margin:0;
+        border:1px solid #D7E7DF; border-top:3px solid #0F766E; border-bottom:2px solid #BFD8CD; border-radius:14px; color:#17312D;
+        background:radial-gradient(ellipse at 8% 0%,#E4F5ED 0%,transparent 46%),#FFFFFF; box-shadow:0 8px 24px #123D3115; }}
+      .khair-brand-lockup {{ display:flex; align-items:center; gap:10px; flex:0 0 auto; }}
       .khair-logo-frame {{ width:64px; height:64px; flex:0 0 64px; display:grid; place-items:center;
         border-radius:17px; background:transparent; }}
       .khair-logo-frame img {{ width:62px; height:62px; object-fit:contain; border-radius:15px; }}
       .khair-brand {{ color:#17312D; font:700 29px/1.1 sans-serif; letter-spacing:-.6px; }}
       .khair-subtitle {{ margin-top:7px; color:#657871; font:500 14px/1.45 sans-serif; }}
-      .khair-section-nav {{ display:flex; gap:10px; flex-wrap:wrap; margin:8px 0 22px; }}
-      .khair-section-nav--footer {{ margin:18px 0 36px; padding:12px 0; border-top:1px solid #DDE9E3; }}
-      .khair-section-nav a {{ display:inline-flex; align-items:center; gap:8px; padding:9px 15px; border-radius:999px;
-        background:#FFFFFF; color:#35564F; border:1px solid #D7E7DF; font-weight:650; text-decoration:none;
-        transition:transform .2s ease, background .2s ease, box-shadow .2s ease; }}
-      .khair-section-nav a:hover {{ background:#E6F4EE; color:#0F766E; border-color:#9AC8B3; transform:translateY(-2px); box-shadow:0 6px 16px #0F766E1F; }}
-      .khair-nav-icon {{ display:inline-grid; place-items:center; min-width:20px; height:20px; border-radius:50%;
-        background:#DDF1E7; color:#0F766E; font-size:13px; animation:khair-icon-float 4s ease-in-out infinite; }}
-      .khair-section-nav a:nth-child(2) .khair-nav-icon {{ animation-delay:.25s; }}
-      .khair-section-nav a:nth-child(3) .khair-nav-icon {{ animation-delay:.5s; }}
-      .khair-section-nav a:nth-child(4) .khair-nav-icon {{ animation-delay:.75s; }}
-      @keyframes khair-icon-float {{ 0%,100% {{ transform:translateY(0); }} 50% {{ transform:translateY(-3px); }} }}
+      .khair-top-nav {{ display:flex; align-items:center; justify-content:flex-end; gap:4px; min-width:0; margin-left:auto; overflow-x:auto; scrollbar-width:thin; }}
+      .khair-top-nav a {{ display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:9px 12px; border-radius:9px;
+        background:transparent; color:#455264; border:1px solid transparent; font-weight:650; white-space:nowrap; text-decoration:none;
+        transition:background .18s ease, color .18s ease, border-color .18s ease; }}
+      .khair-top-nav a:first-child, .khair-top-nav a:focus {{ background:#E1F6EF; color:#087A61; border-color:#BCEBD7; outline:none; }}
+      .khair-top-nav a:hover {{ background:#E6F4EE; color:#0F766E; border-color:#9AC8B3; }}
+      .khair-nav-icon {{ display:inline-grid; place-items:center; min-width:20px; height:20px; color:currentColor; font-size:15px; }}
       .khair-heading-accent {{ width:100%; height:3px; margin:-13px 0 22px; overflow:hidden; border-radius:5px;
         background:linear-gradient(90deg,#C8E5D7,#E8D6A7,#C8E5D7); }}
       .khair-heading-accent span {{ display:block; height:100%; width:22%; border-radius:inherit;
@@ -771,18 +771,26 @@ st.html(
       .khair-progress-copy {{ flex:1; min-width:0; }}
       @media(max-width:480px) {{ .khair-infographic-grid {{ grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px; }} .khair-infographic-card {{ min-height:120px; padding:13px; }} .khair-infographic-value {{ font-size:21px; }} }}
       @keyframes khair-heading-sweep {{ from {{ transform:translateX(-110%); }} to {{ transform:translateX(520%); }} }}
-      @media (prefers-reduced-motion: reduce) {{ .khair-nav-icon, .khair-heading-accent span {{ animation:none; }} }}
+      @media (prefers-reduced-motion: reduce) {{ .khair-heading-accent span {{ animation:none; }} }}
       [data-testid="stAppViewContainer"] #members, [data-testid="stAppViewContainer"] #fund-ledger,
-      [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview {{ scroll-margin-top:24px; }}
-      @media(max-width:620px) {{ .khair-hero {{ padding:14px 16px; gap:12px; }} .khair-logo-frame {{ width:54px;height:54px;flex-basis:54px; }}
-        .khair-logo-frame img {{ width:52px;height:52px; }} .khair-brand {{ font-size:25px; }} }}
+      [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview {{ scroll-margin-top:164px; }}
+      @media(max-width:900px) {{ .khair-hero {{ flex-wrap:wrap; gap:8px; }} .khair-top-nav {{ order:2; width:100%; justify-content:flex-start; margin-left:0; }} }}
+      @media(max-width:620px) {{ .khair-hero {{ padding:9px 11px; gap:7px; }} .khair-logo-frame {{ width:48px;height:48px;flex-basis:48px; }}
+        .khair-logo-frame img {{ width:46px;height:46px; }} .khair-brand {{ font-size:23px; }} .khair-subtitle {{ font-size:12px; }}
+        .khair-top-nav a {{ padding:8px 10px; font-size:13px; }}
+        [data-testid="stAppViewContainer"] [data-testid="stElementContainer"]:has(.khair-hero) {{ top:3.5rem; }}
+        [data-testid="stAppViewContainer"] #members, [data-testid="stAppViewContainer"] #fund-ledger,
+        [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview {{ scroll-margin-top:220px; }} }}
       {dark_overrides}
     </style>
     <header class="khair-hero" aria-label="Khair group fund dashboard">
-      <div class="khair-logo-frame">{'<img alt="Khair logo" src="data:image/png;base64,' + logo_data + '">' if logo_data else '<span style="font-size:34px;font-weight:bold">خ</span>'}</div>
-      <div><div class="khair-brand">Khair <span style="color:#55dfbd">·</span> Group Fund</div>
-        <div class="khair-subtitle">Contributions, member activity &amp; investment overview</div>
+      <div class="khair-brand-lockup">
+        <div class="khair-logo-frame">{'<img alt="Khair logo" src="data:image/png;base64,' + logo_data + '">' if logo_data else '<span style="font-size:34px;font-weight:bold">خ</span>'}</div>
+        <div><div class="khair-brand">Khair <span style="color:#55dfbd">·</span></div>
+          <div class="khair-subtitle">Group Fund &amp; Investment Portal</div>
         </div>
+      </div>
+      {section_nav_markup()}
     </header>
     """
 )
@@ -889,8 +897,6 @@ render_infographic_summary(
     completion=completion,
     month=selected_month,
 )
-
-render_section_nav()
 
 with st.container():
     st.header(":material/dashboard: Overview", anchor="overview")
@@ -1057,8 +1063,6 @@ with st.container():
                 alt="The eight members with the most unpaid months through the selected month",
             )
 
-render_section_nav(footer=True)
-
 with st.container():
     st.header(":material/groups: Members", anchor="members")
     render_section_accent()
@@ -1126,8 +1130,6 @@ with st.container():
             matrix[month] = matrix[month].map(lambda amount: "✓" if amount > 0 else "—")
         st.dataframe(matrix, hide_index=True, alt="Full member payment history by month")
 
-render_section_nav(footer=True)
-
 with st.container():
     st.header(":material/account_balance_wallet: Fund ledger", anchor="fund-ledger")
     render_section_accent()
@@ -1165,8 +1167,6 @@ with st.container():
         },
         alt="Monthly contribution totals and expected target",
     )
-
-render_section_nav(footer=True)
 
 with st.container():
     st.header(":material/campaign: Share & reminders", anchor="share-reminders")
@@ -1455,5 +1455,4 @@ with st.container():
             else:
                 st.caption("Select at least one member to prepare the email draft.")
 
-render_section_nav(footer=True)
 st.caption("Khair · Group fund dashboard · Read-only connection")
