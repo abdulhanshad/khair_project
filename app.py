@@ -615,28 +615,29 @@ def build_section_pdf(
                 continue
         return ImageFont.load_default(size=size)
 
-    title_font, body_font = get_font(40, True), get_font(21)
+    title_font, body_font = get_font(34, True), get_font(21)
     small_font, bold_font = get_font(17), get_font(19, True)
     pages: list[Image.Image] = []
 
     def new_page(page_number: int) -> tuple[Image.Image, ImageDraw.ImageDraw, int]:
-        page = Image.new("RGB", (page_w, page_h), "#F7FAF8")
+        page = Image.new("RGB", (page_w, page_h), "#FBFCFB")
         draw = ImageDraw.Draw(page)
-        draw.rectangle((0, 0, page_w, 190), fill="#F0F7F3")
-        draw.rectangle((0, 184, page_w, 190), fill="#B9D9CB")
-        draw.text((72, 42), "KHAIR  /  GROUP FUND", font=small_font, fill=emerald)
-        draw.text((72, 78), title, font=title_font, fill=ink)
-        draw.text((74, 140), f"{month_label(month)}  ·  Refreshed {refreshed_at:%d %b %Y, %H:%M}", font=small_font, fill=muted)
+        draw.rectangle((0, 0, page_w, 190), fill="#EAF2EE")
+        draw.rectangle((0, 184, page_w, 190), fill="#C6D9D0")
         if PDF_LOGO_PATH.exists():
             try:
                 with Image.open(PDF_LOGO_PATH) as logo:
                     logo = logo.convert("RGBA")
                     logo.thumbnail((380, 104), Image.Resampling.LANCZOS)
-                    draw.rounded_rectangle((page_w - 445, 29, page_w - 48, 151), radius=16, fill="#FFFFFF", outline="#D8E7E1", width=2)
-                    page.paste(logo, (page_w - 439, 38), logo)
+                    draw.rounded_rectangle((72, 29, 469, 151), radius=16, fill="#FFFFFF", outline="#D8E7E1", width=2)
+                    page.paste(logo, (80, 38), logo)
             except OSError:
                 pass
-        draw.line((72, page_h - 82, page_w - 72, page_h - 82), fill=edge, width=2)
+        draw.text((page_w - 72, 42), "KHAIR  /  GROUP FUND", font=small_font, fill=emerald, anchor="ra")
+        draw.text((page_w - 72, 75), title, font=title_font, fill=ink, anchor="ra")
+        draw.text((page_w - 72, 140), f"{month_label(month)}  ·  Refreshed {refreshed_at:%d %b %Y, %H:%M}", font=small_font, fill=muted, anchor="ra")
+        draw.rectangle((0, page_h - 94, page_w, page_h), fill="#EAF2EE")
+        draw.line((72, page_h - 94, page_w - 72, page_h - 94), fill="#C6D9D0", width=2)
         draw.text((72, page_h - 55), "Khair Group Fund  ·  Read-only dashboard report", font=small_font, fill=muted)
         draw.text((page_w - 115, page_h - 55), f"{page_number:02d}", font=bold_font, fill=emerald)
         pages.append(page)
@@ -2235,7 +2236,7 @@ with st.container():
     }
     report_title, report_metrics, report_tables, report_chart = report_specs[report_type]
     with st.container(border=True):
-        st.markdown(f"**{report_title} · {report_month_name}**")
+        st.markdown(f"### {report_title} · {report_month_name}")
         st.caption(f"{len(report_tables)} worksheet section(s) · refreshed {data['loaded_at']:%d %b %Y at %H:%M}")
         if report_format == "Excel":
             report_payload = build_section_excel(
@@ -2259,5 +2260,31 @@ with st.container():
             type="primary",
             key=f"central_report_{report_slug}_{report_month}_{report_format}",
         )
+        st.markdown("#### Report preview")
+        if report_metrics:
+            with st.container(horizontal=True, wrap=True, gap="small"):
+                for metric_label, metric_value in report_metrics:
+                    st.metric(metric_label, metric_value, border=True)
+        if report_chart:
+            chart_preview = pd.DataFrame(
+                report_chart,
+                columns=["Month", "Collected (BHD)", "Expected (BHD)"],
+            )
+            st.line_chart(
+                chart_preview,
+                x="Month",
+                y=["Collected (BHD)", "Expected (BHD)"],
+                alt="Monthly contributions compared with the expected target",
+            )
+        for table_title, table_headers, table_rows in report_tables:
+            st.markdown(f"**{table_title}**")
+            preview_table = pd.DataFrame(table_rows, columns=table_headers)
+            st.dataframe(
+                preview_table,
+                hide_index=True,
+                width="stretch",
+                height=min(460, max(150, 38 * (len(preview_table) + 1))),
+                alt=f"{table_title} report preview",
+            )
 
 st.caption("Khair · Group fund dashboard · Read-only connection")
