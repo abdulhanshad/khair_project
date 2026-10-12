@@ -973,8 +973,8 @@ SECTION_LINKS = [
     ("overview", "Overview", "▦", "Overview"),
     ("share-reminders", "Reminder", "↗", "Reminder"),
     ("fund-ledger", "Fund ledger", "▤", "Ledger"),
-    ("members", "Members", "♙", "Members"),
     ("reports", "Reports", "▧", "Reports"),
+    ("members", "Members", "♙", "Members"),
 ]
 
 def section_nav_markup() -> str:
@@ -2262,9 +2262,27 @@ with st.container():
         )
         st.markdown("#### Report preview")
         if report_metrics:
-            with st.container(horizontal=True, wrap=True, gap="small"):
-                for metric_label, metric_value in report_metrics:
-                    st.metric(metric_label, metric_value, border=True)
+            report_tiles = []
+            for metric_label, metric_value in report_metrics:
+                label_lower = metric_label.lower()
+                if "gold" in label_lower or "p/l" in label_lower:
+                    icon = "✦"
+                    tone = "coral" if "-" in metric_value else "emerald"
+                    hint = "Current value from the gold portfolio"
+                elif "outstanding" in label_lower or "pending" in label_lower:
+                    icon, tone = "↘", "coral"
+                    hint = "Contribution follow-up total"
+                elif "month" in label_lower or "paid" in label_lower:
+                    icon, tone = "◷", "blue"
+                    hint = f"Selected period · {report_month_name}"
+                elif "member" in label_lower:
+                    icon, tone = "♧", "emerald"
+                    hint = "Members in the group"
+                else:
+                    icon, tone = "◇", "gold"
+                    hint = "From the shared fund records"
+                report_tiles.append((metric_label, icon, metric_value, hint, tone))
+            render_infographic_tiles(report_tiles)
         if report_chart:
             chart_preview = pd.DataFrame(
                 report_chart,
