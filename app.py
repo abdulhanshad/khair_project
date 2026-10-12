@@ -583,7 +583,20 @@ def money(value: float) -> str:
 
 
 def month_label(value: str) -> str:
+    if re.fullmatch(r"\d{4}", str(value)):
+        return str(value)
+    if str(value).startswith("FY "):
+        return str(value)
     return datetime.strptime(value, "%b-%y").strftime("%b %Y")
+
+
+def financial_year_start(month_key: str) -> int:
+    month_date = datetime.strptime(month_key, "%b-%y")
+    return month_date.year if month_date.month >= 9 else month_date.year - 1
+
+
+def financial_year_label(start_year: int) -> str:
+    return f"FY {start_year}–{str(start_year + 1)[-2:]}"
 
 
 @st.cache_data(show_spinner=False)
@@ -2040,22 +2053,15 @@ with st.container():
 with st.container():
     st.header(":material/description: Reports", anchor="reports")
     render_section_accent()
-    st.caption("Choose a report, reporting month, and file format. Excel downloads include a summary sheet and separate worksheets for each report table.")
+    st.caption("Choose a report, reporting month or financial year, and file format. Excel downloads include a summary sheet and separate worksheets for each report table.")
 
-    report_month_col, report_type_col, report_format_col = st.columns([1, 1.6, 1], gap="medium")
-    with report_month_col:
-        report_month = st.selectbox(
-            "Report month",
-            months,
-            index=months.index(selected_month),
-            format_func=month_label,
-            key="reports_month_filter",
-        )
+    report_type_col, report_period_col, report_format_col = st.columns([1.6, 1, 1], gap="medium")
     with report_type_col:
         report_type = st.selectbox(
             "Report",
             [
                 "Full dashboard",
+                "Yearly report",
                 "Overview and gold",
                 "Member payment status",
                 "Full payment history",
@@ -2067,6 +2073,32 @@ with st.container():
             ],
             key="reports_type",
         )
+    available_report_years = sorted({financial_year_start(item) for item in months})
+    with report_period_col:
+        if report_type == "Yearly report":
+            report_year = st.selectbox(
+                "Financial year",
+                available_report_years,
+                index=len(available_report_years) - 1,
+                format_func=financial_year_label,
+                key="reports_year_filter",
+            )
+            report_year_months = [
+                item for item in months if financial_year_start(item) == report_year
+            ]
+            report_month = report_year_months[-1]
+        else:
+            report_month = st.selectbox(
+                "Report month",
+                months,
+                index=months.index(selected_month),
+                format_func=month_label,
+                key="reports_month_filter",
+            )
+            report_year = datetime.strptime(report_month, "%b-%y").year
+            report_year_months = [
+                item for item in months if financial_year_start(item) == financial_year_start(report_month)
+            ]
     with report_format_col:
         report_format = st.segmented_control(
             "Download format",
@@ -2076,7 +2108,7 @@ with st.container():
             key="reports_file_format",
         )
 
-    report_month_name = month_label(report_month)
+    report_month_name = financial_year_label(report_year) if report_type == "Yearly report" else month_label(report_month)
     report_months_to_date = months[: months.index(report_month) + 1]
     report_unpaid_counts = members[report_months_to_date].le(0).sum(axis=1)
     report_paid_count = int((members[report_month] > 0).sum())
@@ -2150,6 +2182,38 @@ with st.container():
         (month_label(row["Month"]), float(row["Collected (BHD)"]), float(row["Expected (BHD)"]))
         for _, row in monthly.iterrows()
     ]
+    yearly_monthly_view = monthly.loc[monthly["Month"].isin(report_year_months)].copy()
+    yearly_collected = float(yearly_monthly_view["Collected (BHD)"].sum())
+    yearly_target = float(yearly_monthly_view["Expected (BHD)"].sum())
+    yearly_paid_installments = int(members[report_year_months].gt(0).to_numpy().sum())
+    yearly_expected_installments = member_count * len(report_year_months)
+    yearly_completion = (
+        100 * yearly_paid_installments / yearly_expected_installments
+        if yearly_expected_installments else 0
+    )
+    yearly_collection_rows = report_dataframe_rows(
+        yearly_monthly_view.assign(Month=yearly_monthly_view["Month"].map(month_label))[
+            ["Month", "Collected (BHD)", "Paid members", "Expected (BHD)"]
+        ]
+    )
+    yearly_payment_history = members[["Name", *report_year_months]].copy()
+    for year_month in report_year_months:
+        yearly_payment_history[month_label(year_month)] = yearly_payment_history.pop(year_month).map(
+            lambda amount: "Paid" if amount > 0 else "Pending"
+        )
+    yearly_paid_counts = members[report_year_months].gt(0).sum(axis=1)
+    yearly_amounts = members[report_year_months].sum(axis=1)
+    yearly_pending_names = [
+        ", ".join(month_label(item) for item in report_year_months if float(member[item]) <= 0) or "None"
+        for _, member in members.iterrows()
+    ]
+    yearly_member_summary = pd.DataFrame({
+        "Name": members["Name"],
+        "Paid months": yearly_paid_counts,
+        "Contributions (BHD)": yearly_amounts.map(money),
+        "Pending months": len(report_year_months) - yearly_paid_counts,
+        "Pending month names": yearly_pending_names,
+    })
     report_metrics_full = [
         ("Total contributions", money(collected_ledger)),
         ("Month collected", money(report_selected_collection)),
@@ -2172,6 +2236,24 @@ with st.container():
                 ("Pending follow-ups", ["Member", "Months", "Pending month names", "Amount due (BHD)"], report_pending_rows),
                 ("Shared payment details", ["Item", "Value"], [["IBAN No", data.get("iban_no", "") or "Not listed"], ["Monthly contribution fee", money(fee)]]),
             ], report_chart_data,
+        ),
+        "Yearly report": (
+            f"Yearly financial report · {financial_year_label(report_year)}",
+            [
+                ("Annual collections", money(yearly_collected)),
+                ("Annual target", money(yearly_target)),
+                ("Paid installments", f"{yearly_paid_installments} / {yearly_expected_installments}"),
+                ("Collection rate", f"{yearly_completion:.1f}%"),
+            ],
+            [
+                (f"Monthly collections · {financial_year_label(report_year)}", ["Month", "Collected (BHD)", "Paid members", "Expected (BHD)"], yearly_collection_rows),
+                (f"Annual member summary · {financial_year_label(report_year)}", list(yearly_member_summary.columns), report_dataframe_rows(yearly_member_summary)),
+                (f"Payment status by month · {financial_year_label(report_year)}", list(yearly_payment_history.columns), report_dataframe_rows(yearly_payment_history)),
+            ],
+            [
+                (month_label(row["Month"]), float(row["Collected (BHD)"]), float(row["Expected (BHD)"]))
+                for _, row in yearly_monthly_view.iterrows()
+            ],
         ),
         "Overview and gold": (
             "Overview and gold report",
@@ -2235,18 +2317,24 @@ with st.container():
         ),
     }
     report_title, report_metrics, report_tables, report_chart = report_specs[report_type]
+    report_period = financial_year_label(report_year) if report_type == "Yearly report" else report_month
+    report_file_period = f"fy-{report_year}-{report_year + 1}" if report_type == "Yearly report" else report_month.lower()
     with st.container(border=True):
-        st.markdown(f"### {report_title} · {report_month_name}")
-        st.caption(f"{len(report_tables)} worksheet section(s) · refreshed {data['loaded_at']:%d %b %Y at %H:%M}")
+        report_heading = report_title if report_type == "Yearly report" else f"{report_title} · {report_month_name}"
+        st.markdown(f"### {report_heading}")
+        report_caption = f"{len(report_tables)} worksheet section(s) · refreshed {data['loaded_at']:%d %b %Y at %H:%M}"
+        if report_type == "Yearly report":
+            report_caption = f"{report_caption} · {len(report_year_months)} month(s) available in the Sep–Aug financial year"
+        st.caption(report_caption)
         if report_format == "Excel":
             report_payload = build_section_excel(
-                report_title, report_month, report_metrics, report_tables, data["loaded_at"]
+                report_title, report_period, report_metrics, report_tables, data["loaded_at"]
             )
             report_extension = "xlsx"
             report_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         else:
             report_payload = build_section_pdf(
-                report_title, report_month, report_metrics, report_tables, data["loaded_at"], report_chart
+                report_title, report_period, report_metrics, report_tables, data["loaded_at"], report_chart
             )
             report_extension = "pdf"
             report_mime = "application/pdf"
@@ -2254,11 +2342,11 @@ with st.container():
         st.download_button(
             f"Download {report_type} ({report_format})",
             data=report_payload,
-            file_name=f"khair-{report_slug}-{report_month.lower()}.{report_extension}",
+            file_name=f"khair-{report_slug}-{report_file_period}.{report_extension}",
             mime=report_mime,
             icon=":material/download:",
             type="primary",
-            key=f"central_report_{report_slug}_{report_month}_{report_format}",
+            key=f"central_report_{report_slug}_{report_file_period}_{report_format}",
         )
         st.markdown("#### Report preview")
         if report_metrics:
