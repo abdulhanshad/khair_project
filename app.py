@@ -6,6 +6,7 @@ import base64
 from html import escape
 import re
 import textwrap
+import zipfile
 from datetime import datetime
 from html.parser import HTMLParser
 from pathlib import Path
@@ -25,6 +26,7 @@ SHEET_CSV_URL = (
     "pub?gid=1055031371&single=true&output=csv"
 )
 LOGO_PATH = Path(__file__).resolve().parent / "assets" / "khair-logo.png"
+PDF_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "khair-logo-light.png"
 BAHRAIN_GOLD_URL = "https://gulfnews.com/gold-forex/bahrain-gold-prices"
 HOLDINGS = {
     "22K gold": {"karat": 22, "grams": 7.7},
@@ -595,7 +597,7 @@ def build_section_pdf(
 ) -> bytes:
     """Render a polished, paginated Khair report using the existing Pillow dependency."""
     page_w, page_h = 1240, 1754
-    dark, emerald, mint = "#102B31", "#0F766E", "#E8F5EE"
+    emerald, mint = "#0F766E", "#E8F5EE"
     ink, muted, edge = "#17312D", "#657871", "#D8E7E1"
     regular_path, bold_path = "C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf"
 
@@ -620,20 +622,21 @@ def build_section_pdf(
     def new_page(page_number: int) -> tuple[Image.Image, ImageDraw.ImageDraw, int]:
         page = Image.new("RGB", (page_w, page_h), "#F7FAF8")
         draw = ImageDraw.Draw(page)
-        draw.rectangle((0, 0, page_w, 190), fill=dark)
-        draw.rectangle((0, 184, page_w, 194), fill=emerald)
-        draw.text((72, 42), "KHAIR  /  GROUP FUND", font=small_font, fill="#72D6B6")
-        draw.text((72, 78), title, font=title_font, fill="#F2FBF7")
-        draw.text((74, 140), f"{month_label(month)}  ·  Refreshed {refreshed_at:%d %b %Y, %H:%M}", font=small_font, fill="#B7CDC6")
-        if LOGO_PATH.exists():
+        draw.rectangle((0, 0, page_w, 190), fill="#F0F7F3")
+        draw.rectangle((0, 184, page_w, 190), fill="#B9D9CB")
+        draw.text((72, 42), "KHAIR  /  GROUP FUND", font=small_font, fill=emerald)
+        draw.text((72, 78), title, font=title_font, fill=ink)
+        draw.text((74, 140), f"{month_label(month)}  ·  Refreshed {refreshed_at:%d %b %Y, %H:%M}", font=small_font, fill=muted)
+        if PDF_LOGO_PATH.exists():
             try:
-                with Image.open(LOGO_PATH) as logo:
+                with Image.open(PDF_LOGO_PATH) as logo:
                     logo = logo.convert("RGBA")
-                    logo.thumbnail((405, 104))
-                    draw.rounded_rectangle((page_w - 445, 29, page_w - 48, 151), radius=16, fill="#0B1822", outline="#286257", width=2)
+                    logo.thumbnail((380, 104), Image.Resampling.LANCZOS)
+                    draw.rounded_rectangle((page_w - 445, 29, page_w - 48, 151), radius=16, fill="#FFFFFF", outline="#D8E7E1", width=2)
                     page.paste(logo, (page_w - 439, 38), logo)
             except OSError:
                 pass
+        draw.line((72, page_h - 82, page_w - 72, page_h - 82), fill=edge, width=2)
         draw.text((72, page_h - 55), "Khair Group Fund  ·  Read-only dashboard report", font=small_font, fill=muted)
         draw.text((page_w - 115, page_h - 55), f"{page_number:02d}", font=bold_font, fill=emerald)
         pages.append(page)
@@ -732,6 +735,173 @@ def report_dataframe_rows(frame: pd.DataFrame) -> list[list[str]]:
     return rows
 
 
+def build_section_excel(
+    title: str,
+    month: str,
+    metrics: list[tuple[str, str]],
+    tables: list[tuple[str, list[str], list[list[str]]]],
+    refreshed_at: datetime,
+) -> bytes:
+    """Build a styled, multi-sheet XLSX report using only the Python standard library."""
+    from xml.sax.saxutils import escape as xml_escape
+
+    def column_name(number: int) -> str:
+        name = ""
+        while number:
+            number, remainder = divmod(number - 1, 26)
+            name = chr(65 + remainder) + name
+        return name
+
+    def safe_sheet_name(value: str, used: set[str]) -> str:
+        base = re.sub(r"[\\/*?:\[\]]", " ", value).strip()[:31] or "Report"
+        candidate, suffix = base, 2
+        while candidate.lower() in used:
+            tail = f" {suffix}"
+            candidate = base[:31 - len(tail)] + tail
+            suffix += 1
+        used.add(candidate.lower())
+        return candidate
+
+    def number_value(value: object, header: str) -> tuple[str, str] | None:
+        label = header.lower()
+        if not any(word in label for word in (
+            "amount", "bhd", "balance", "collection", "collected", "contribut", "outstanding",
+            "due", "cost", "value", "rate", "weight", "profit", "loss", "p/l", "months",
+            "members", "count", "paid", "registration", "expected", "target",
+        )):
+            return None
+        raw = str(value).strip()
+        if not raw or raw in {"—", "None", "Not listed"}:
+            return None
+        percent = raw.endswith("%")
+        currency = raw.upper().startswith("BHD ")
+        numeric = raw[4:].strip() if currency else raw
+        if percent:
+            numeric = numeric[:-1].strip()
+        numeric = numeric.replace(",", "")
+        if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)", numeric):
+            return None
+        number = float(numeric)
+        if percent:
+            number /= 100
+            return f"{number:.10g}", "6"
+        return f"{number:.10g}", "5" if currency else "4"
+
+    workbook_sheets: list[tuple[str, list[list[tuple[str, str]]], bool]] = []
+    summary_rows: list[list[tuple[str, str]]] = [
+        [(title, "2")],
+        [("Report month", "3"), (month_label(month), "0")],
+        [("Refreshed", "3"), (refreshed_at.strftime("%d %b %Y, %H:%M"), "0")],
+        [],
+        [("Metric", "1"), ("Value", "1")],
+    ]
+    summary_rows.extend([[(label, "0"), (value, "0")] for label, value in metrics])
+    workbook_sheets.append(("Summary", summary_rows, False))
+
+    used_names = {"summary"}
+    for table_title, headers, rows in tables:
+        sheet_name = safe_sheet_name(table_title, used_names)
+        sheet_rows: list[list[tuple[str, str]]] = [[(table_title, "2")]]
+        sheet_rows.append([(str(header), "1") for header in headers])
+        for row in rows:
+            cells = []
+            for column_index, value in enumerate(row):
+                header = headers[column_index] if column_index < len(headers) else ""
+                numeric = number_value(value, header)
+                cells.append(numeric if numeric else (str(value), "0"))
+            sheet_rows.append(cells)
+        workbook_sheets.append((sheet_name, sheet_rows, True))
+
+    def sheet_xml(rows: list[list[tuple[str, str]]], has_header: bool) -> str:
+        xml_rows = []
+        max_columns = max((len(row) for row in rows), default=1)
+        widths = [10] * max_columns
+        for row_index, row in enumerate(rows, start=1):
+            xml_cells = []
+            for col_index, (value, style) in enumerate(row, start=1):
+                ref = f"{column_name(col_index)}{row_index}"
+                widths[col_index - 1] = min(48, max(widths[col_index - 1], len(str(value)) + 2))
+                if style in {"4", "5", "6"}:
+                    xml_cells.append(f'<c r="{ref}" s="{style}"><v>{value}</v></c>')
+                else:
+                    xml_cells.append(
+                        f'<c r="{ref}" s="{style}" t="inlineStr"><is><t xml:space="preserve">{xml_escape(str(value))}</t></is></c>'
+                    )
+            xml_rows.append(f'<row r="{row_index}">{"".join(xml_cells)}</row>')
+        cols = "".join(
+            f'<col min="{index}" max="{index}" width="{width}" customWidth="1"/>'
+            for index, width in enumerate(widths, start=1)
+        )
+        last_col = column_name(max_columns)
+        auto_filter = ""
+        if has_header and len(rows) > 2:
+            auto_filter = f'<autoFilter ref="A2:{last_col}{len(rows)}"/>'
+        return (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+            '<sheetViews><sheetView workbookViewId="0"><pane ySplit="2" topLeftCell="A3" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
+            f'<cols>{cols}</cols><sheetData>{"".join(xml_rows)}</sheetData>{auto_filter}'
+            '</worksheet>'
+        )
+
+    sheet_count = len(workbook_sheets)
+    content_overrides = "".join(
+        f'<Override PartName="/xl/worksheets/sheet{index}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        for index in range(1, sheet_count + 1)
+    )
+    workbook_sheet_nodes = "".join(
+        f'<sheet name="{xml_escape(name)}" sheetId="{index}" r:id="rId{index}"/>'
+        for index, (name, _, _) in enumerate(workbook_sheets, start=1)
+    )
+    workbook_relationships = "".join(
+        f'<Relationship Id="rId{index}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{index}.xml"/>'
+        for index in range(1, sheet_count + 1)
+    ) + (
+        f'<Relationship Id="rId{sheet_count + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>'
+    )
+    styles_xml = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<numFmts count="2"><numFmt numFmtId="164" formatCode="&quot;BHD &quot;#,##0.00;[Red]-&quot;BHD &quot;#,##0.00"/><numFmt numFmtId="165" formatCode="0.00%"/></numFmts>
+<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font><font><b/><color rgb="FF17312D"/><sz val="16"/><name val="Calibri"/></font></fonts>
+<fills count="4"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF0F766E"/><bgColor indexed="64"/></patternFill></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE8F5EE"/><bgColor indexed="64"/></patternFill></fill></fills>
+<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
+<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
+<cellXfs count="7"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="2" fillId="3" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="0" fontId="0" fillId="3" borderId="0" xfId="0" applyFill="1"/><xf numFmtId="4" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'''
+
+    output = io.BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+            '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+            '<Default Extension="xml" ContentType="application/xml"/>'
+            '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+            '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+            f'{content_overrides}</Types>'
+        ))
+        archive.writestr("_rels/.rels", (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+            '</Relationships>'
+        ))
+        archive.writestr("xl/workbook.xml", (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+            f'<sheets>{workbook_sheet_nodes}</sheets></workbook>'
+        ))
+        archive.writestr("xl/_rels/workbook.xml.rels", (
+            '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            f'{workbook_relationships}</Relationships>'
+        ))
+        archive.writestr("xl/styles.xml", styles_xml)
+        for index, (_, rows, has_header) in enumerate(workbook_sheets, start=1):
+            archive.writestr(f"xl/worksheets/sheet{index}.xml", sheet_xml(rows, has_header))
+    return output.getvalue()
+
+
 def load_if_needed(force: bool = False) -> None:
     if "khair_data" not in st.session_state or force:
         with st.spinner("Refreshing the latest figures…"):
@@ -803,6 +973,7 @@ SECTION_LINKS = [
     ("share-reminders", "Reminder", "↗", "Reminder"),
     ("fund-ledger", "Fund ledger", "▤", "Ledger"),
     ("members", "Members", "♙", "Members"),
+    ("reports", "Reports", "▧", "Reports"),
 ]
 
 def section_nav_markup() -> str:
@@ -884,7 +1055,7 @@ with st.container(key="khair-topbar"):
             f"""
     <style>
       [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] {{ display:none !important; }}
-      section.main > div {{ padding-top: 1.3rem; }}
+      section.main > div {{ padding-top: .75rem; }}
       [data-testid="stBaseButton-primary"], [data-testid="stBaseButton-primary"]:enabled {{
         background:#0F766E !important; background-color:#0F766E !important;
         border:1px solid #0F766E !important; color:#FFFFFF !important;
@@ -941,8 +1112,8 @@ with st.container(key="khair-topbar"):
       .khair-heading-accent span {{ display:block; height:100%; width:22%; border-radius:inherit; opacity:.48;
         background:linear-gradient(90deg,transparent 0%,#0F766E 22%,#41DAAB 52%,#D8B45C 78%,transparent 100%);
         animation:khair-heading-sweep 8s ease-in-out infinite; }}
-      .khair-infographic-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:14px; margin:14px 0; }}
-      .khair-infographic-card {{ position:relative; min-height:132px; padding:17px 18px 15px; overflow:hidden;
+      .khair-infographic-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:11px; margin:8px 0; }}
+      .khair-infographic-card {{ position:relative; min-height:120px; padding:14px 16px 13px; overflow:hidden;
         border:1px solid #D7E7DF; border-radius:18px; background:#FFFFFF; color:#17312D;
         box-shadow:0 6px 18px #123D310B; }}
       .khair-infographic-card::after {{ content:""; position:absolute; right:-32px; bottom:-44px; width:112px; height:112px;
@@ -957,7 +1128,9 @@ with st.container(key="khair-topbar"):
       .khair-infographic-label {{ color:#657871; font-size:12px; font-weight:700; letter-spacing:.09em; text-transform:uppercase; }}
       .khair-infographic-value {{ margin-top:13px; font-size:25px; line-height:1.1; font-weight:750; letter-spacing:-.04em; }}
       .khair-infographic-hint {{ margin-top:5px; color:#71827C; font-size:12px; }}
-      .khair-progress-band {{ margin:12px 0 28px; padding:17px 20px; border:1px solid #B9D9CB; border-radius:18px;
+      .khair-sheet-status {{ margin:0; padding:0; color:#657871; font:500 12px/1.25 sans-serif; text-align:center; }}
+      div[data-testid="stElementContainer"]:has(.khair-sheet-status) {{ margin-block:-9px !important; }}
+      .khair-progress-band {{ margin:8px 0 20px; padding:13px 17px; border:1px solid #B9D9CB; border-radius:18px;
         background:linear-gradient(115deg,#E8F5EE,#F8FBF9 68%,#F4EEDF); }}
       .khair-progress-heading {{ display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:10px; }}
       .khair-progress-heading strong {{ color:#17312D; font-size:15px; }}
@@ -975,17 +1148,20 @@ with st.container(key="khair-topbar"):
       @keyframes khair-heading-sweep {{ from {{ transform:translateX(-110%); }} to {{ transform:translateX(520%); }} }}
       @media (prefers-reduced-motion: reduce) {{ .khair-heading-accent span {{ animation:none; }} }}
       [data-testid="stAppViewContainer"] #dashboard, [data-testid="stAppViewContainer"] #members, [data-testid="stAppViewContainer"] #fund-ledger,
-      [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview {{ scroll-margin-top:280px; }}
+      [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview,
+      [data-testid="stAppViewContainer"] #reports {{ scroll-margin-top:280px; }}
       @media(max-width:900px) {{ .khair-top-nav {{ justify-content:space-between; gap:0; overflow:hidden; }} .khair-top-nav a {{ padding:7px 5px; gap:0; font-size:10px; }} .khair-nav-icon {{ display:none; }}
         .khair-nav-label {{ font-size:0; }} .khair-nav-label::after {{ content:attr(data-short); display:inline; font-size:10px; }} }}
       @media(max-width:620px) {{ .khair-hero {{ padding:9px 11px; gap:7px; }}
         .khair-brand {{ font-size:23px; }} .khair-subtitle {{ font-size:12px; }} .khair-arabic-mark {{ min-width:34px; height:29px; font-size:16px; }}
-        .st-key-khair-menu-row {{ gap:4px; }} .khair-top-nav a {{ padding:6px 4px; }}
+        .st-key-khair-menu-row {{ gap:4px; }} .khair-top-nav a {{ padding:6px 2px; font-size:9px; }}
+        .khair-nav-label::after {{ font-size:9px; }}
         .st-key-khair-menu-row [data-testid="stButton"] button {{ padding:6px 8px; font-size:11px; }} .st-key-khair-menu-row [data-testid="stToggle"] {{ min-width:92px; }}
         [data-testid="stAppViewContainer"] [class*="khair-topbar"],
         [data-testid="stAppViewContainer"] [data-testid="stVerticalBlockBorderWrapper"]:has(.khair-hero) {{ top:3.5rem !important; }}
         [data-testid="stAppViewContainer"] #dashboard, [data-testid="stAppViewContainer"] #members, [data-testid="stAppViewContainer"] #fund-ledger,
-        [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview {{ scroll-margin-top:280px; }} }}
+        [data-testid="stAppViewContainer"] #share-reminders, [data-testid="stAppViewContainer"] #overview,
+        [data-testid="stAppViewContainer"] #reports {{ scroll-margin-top:280px; }} }}
       {dark_overrides}
     </style>
     <header class="khair-hero" aria-label="Khair group fund dashboard">
@@ -1002,7 +1178,7 @@ with st.container(key="khair-topbar"):
         refresh_clicked = st.button("Refresh", icon=":material/refresh:", type="secondary", help="Refresh sheet and gold rate")
         dark_mode_toggle = st.toggle("Dark mode", value=dark_mode, key="khair_dark_mode")
 
-st.html('<div aria-hidden="true" style="height:155px"></div>')
+st.html('<div aria-hidden="true" style="height:135px"></div>')
 
 load_if_needed(force=refresh_clicked)
 data = st.session_state.get("khair_data")
@@ -1027,30 +1203,23 @@ fee: float = data["monthly_fee"]
 
 st.header(":material/dashboard: Dashboard", anchor="dashboard")
 render_section_accent()
-st.caption(
-    f"Connected to Google Sheets · refreshed "
-    f"{data['loaded_at'].strftime('%d %b %Y at %H:%M')}"
+st.html(
+    f'<div class="khair-sheet-status">Connected to Google Sheets · refreshed '
+    f'{data["loaded_at"].strftime("%d %b %Y at %H:%M")}</div>'
 )
 
 latest_month = months[-1]
-with st.container(border=True):
-    filter_col, threshold_col, note_col = st.columns([1, 1.25, 1.4], vertical_alignment="bottom")
-    with filter_col:
-        selected_month = st.selectbox(
-            "Contribution month",
-            months,
-            index=months.index(latest_month),
-            format_func=month_label,
-        )
-    with threshold_col:
-        group_limit = st.number_input(
-            "Pending follow-up threshold (months)",
-            min_value=1,
-            max_value=max(1, len(months)),
-            value=min(3, max(1, len(months))),
-        )
-    with note_col:
-        st.caption("Read-only connection · edit contributions in the source sheet")
+st.session_state.setdefault("khair_selected_month", latest_month)
+if st.session_state["khair_selected_month"] not in months:
+    st.session_state["khair_selected_month"] = latest_month
+threshold_default = min(3, max(1, len(months)))
+st.session_state.setdefault("khair_follow_up_threshold", threshold_default)
+st.session_state["khair_follow_up_threshold"] = min(
+    max(1, int(st.session_state["khair_follow_up_threshold"])),
+    max(1, len(months)),
+)
+selected_month = st.session_state["khair_selected_month"]
+group_limit = st.session_state["khair_follow_up_threshold"]
 
 paid_this_month = int((members[selected_month] > 0).sum())
 member_count = len(members)
@@ -1121,13 +1290,13 @@ st.html(
     """
 )
 
-st.html('<div class="khair-ticker-clearance" aria-hidden="true"></div>')
 st.html(
     """
     <style>
-      .khair-ticker-clearance { height:24px; }
-      @media(max-width:620px) { .khair-ticker-clearance { height:18px; } }
+      .khair-ticker-clearance { height:3px; }
+      @media(max-width:620px) { .khair-ticker-clearance { height:2px; } }
     </style>
+    <div class="khair-ticker-clearance" aria-hidden="true"></div>
     """
 )
 
@@ -1142,6 +1311,25 @@ render_infographic_summary(
     completion=completion,
     month=selected_month,
 )
+
+with st.container(border=True):
+    filter_col, threshold_col, note_col = st.columns([1, 1.25, 1.4], vertical_alignment="bottom")
+    with filter_col:
+        st.selectbox(
+            "Contribution month",
+            months,
+            format_func=month_label,
+            key="khair_selected_month",
+        )
+    with threshold_col:
+        st.number_input(
+            "Pending follow-up threshold (months)",
+            min_value=1,
+            max_value=max(1, len(months)),
+            key="khair_follow_up_threshold",
+        )
+    with note_col:
+        st.caption("Read-only connection · edit contributions in the source sheet")
 
 with st.container():
     st.header(":material/dashboard: Overview", anchor="overview")
@@ -1847,5 +2035,229 @@ with st.container():
         mime="application/pdf",
         icon=":material/picture_as_pdf:",
     )
+
+with st.container():
+    st.header(":material/description: Reports", anchor="reports")
+    render_section_accent()
+    st.caption("Choose a report, reporting month, and file format. Excel downloads include a summary sheet and separate worksheets for each report table.")
+
+    report_month_col, report_type_col, report_format_col = st.columns([1, 1.6, 1], gap="medium")
+    with report_month_col:
+        report_month = st.selectbox(
+            "Report month",
+            months,
+            index=months.index(selected_month),
+            format_func=month_label,
+            key="reports_month_filter",
+        )
+    with report_type_col:
+        report_type = st.selectbox(
+            "Report",
+            [
+                "Full dashboard",
+                "Overview and gold",
+                "Member payment status",
+                "Full payment history",
+                "Pending follow-ups",
+                "Fund ledger",
+                "Monthly collections",
+                "Gold portfolio",
+                "Reminder summary",
+            ],
+            key="reports_type",
+        )
+    with report_format_col:
+        report_format = st.segmented_control(
+            "Download format",
+            ["PDF", "Excel"],
+            default="PDF",
+            selection_mode="single",
+            key="reports_file_format",
+        )
+
+    report_month_name = month_label(report_month)
+    report_months_to_date = months[: months.index(report_month) + 1]
+    report_unpaid_counts = members[report_months_to_date].le(0).sum(axis=1)
+    report_paid_count = int((members[report_month] > 0).sum())
+    report_due_count = member_count - report_paid_count
+    report_due_amount = report_due_count * fee
+    report_selected_collection = float(
+        monthly.loc[monthly["Month"] == report_month, "Collected (BHD)"].iloc[0]
+    )
+    report_member_details = members[["Name", "Registration fee", "Paid months", "Monthly contributions"]].copy()
+    report_member_details["Unpaid months"] = report_unpaid_counts.values
+    report_member_details["Pending month names"] = [
+        ", ".join(month_label(item) for item in report_months_to_date if float(member[item]) <= 0) or "None"
+        for _, member in members.iterrows()
+    ]
+    report_member_details["Paid month names"] = [
+        ", ".join(month_label(item) for item in report_months_to_date if float(member[item]) > 0) or "None"
+        for _, member in members.iterrows()
+    ]
+    report_member_details["Amount outstanding (BHD)"] = report_unpaid_counts.values * fee
+    report_member_details = report_member_details.rename(columns={
+        "Registration fee": "Registration (BHD)",
+        "Monthly contributions": "Contributed (BHD)",
+    })
+    report_payment_status = members[["Name", "Registration fee", "Paid months", "Monthly contributions"]].copy()
+    report_payment_status["Unpaid through selected month"] = report_unpaid_counts.values
+    report_payment_status[report_month_name] = members[report_month].map(
+        lambda amount: "Paid" if amount > 0 else "Pending"
+    )
+    report_history = members[["Name", *months]].copy()
+    for month_header in months:
+        report_history[month_label(month_header)] = report_history.pop(month_header).map(
+            lambda amount: "Paid" if amount > 0 else "Pending"
+        )
+    report_monthly_view = monthly.assign(Month=monthly["Month"].map(month_label))
+    report_pending_rows = []
+    for _, report_member in members.iterrows():
+        unpaid_month_labels = [
+            month_label(item)
+            for item in report_months_to_date
+            if float(report_member[item]) <= 0
+        ]
+        if unpaid_month_labels:
+            report_pending_rows.append([
+                str(report_member["Name"]), str(len(unpaid_month_labels)),
+                ", ".join(unpaid_month_labels), money(len(unpaid_month_labels) * fee),
+            ])
+    report_pending_rows.sort(key=lambda row: (-int(row[1]), row[0].lower()))
+    if not report_pending_rows:
+        report_pending_rows = [["No pending members", "0", "—", money(0)]]
+    report_gold_rows = [
+        [position["Holding"], f'{position["Weight"]:g}', f'{position["Purchase rate"]:,.2f}',
+         f'{position["Rate"]:,.2f}', f'{position["Cost"]:,.2f}', f'{position["Value"]:,.2f}',
+         f'{position["P/L"]:+,.2f}']
+        for position in positions
+    ] or [["Live gold rate unavailable", "—", "—", "—", "—", "—", "—"]]
+    report_ledger_rows = [
+        [label, money(data["ledger"][key]) if data["ledger"].get(key) is not None else "Not listed"]
+        for label, key in [
+            ("Balance", "balance"), ("Total collection", "total collection"),
+            ("Total outstanding", "total outstanding"), ("Registration fees", "reg. fee"),
+            ("Meeting expenses", "meeting exp."), ("Gold", "gold"),
+            ("Kuri", "kuri"), ("Rounding", "rounding"),
+        ]
+    ]
+    report_pending_df = pd.DataFrame(
+        report_pending_rows,
+        columns=["Member", "Months", "Pending month names", "Amount due (BHD)"],
+    )
+    report_top_pending_df = report_pending_df.head(8)
+    report_chart_data = [
+        (month_label(row["Month"]), float(row["Collected (BHD)"]), float(row["Expected (BHD)"]))
+        for _, row in monthly.iterrows()
+    ]
+    report_metrics_full = [
+        ("Total contributions", money(collected_ledger)),
+        ("Month collected", money(report_selected_collection)),
+        ("Total outstanding", money(total_outstanding) if total_outstanding is not None else "Not listed"),
+        ("Gold P/L", money(gold_total_pnl)),
+    ]
+    report_gold_metrics = [
+        ("Gold value", money(gold_total_value)),
+        ("Gold P/L", money(gold_total_pnl)),
+        ("P/L per member", f"BHD {gold_total_pnl / member_count:+,.2f}" if member_count else "Not available"),
+    ]
+    report_specs = {
+        "Full dashboard": (
+            "Full dashboard report", report_metrics_full,
+            [
+                ("All member contribution details", list(report_member_details.columns), report_dataframe_rows(report_member_details)),
+                ("Gold holdings and profit or loss", ["Holding", "Weight (g)", "Purchase/g", "Live rate/g", "Cost (BHD)", "Value (BHD)", "P/L (BHD)"], report_gold_rows),
+                ("Fund ledger", ["Fund item", "Amount"], report_ledger_rows),
+                ("Monthly collections and target", list(report_monthly_view.columns), report_dataframe_rows(report_monthly_view)),
+                ("Pending follow-ups", ["Member", "Months", "Pending month names", "Amount due (BHD)"], report_pending_rows),
+                ("Shared payment details", ["Item", "Value"], [["IBAN No", data.get("iban_no", "") or "Not listed"], ["Monthly contribution fee", money(fee)]]),
+            ], report_chart_data,
+        ),
+        "Overview and gold": (
+            "Overview and gold report",
+            [("Fund collected", money(collected_ledger)), ("Month collected", money(report_selected_collection)),
+             ("Current month outstanding", money(report_due_amount)), ("Gold P/L", money(gold_total_pnl))],
+            [
+                ("Monthly collection trend", ["Month", "Collected (BHD)", "Expected (BHD)", "Paid members"], report_dataframe_rows(report_monthly_view[["Month", "Collected (BHD)", "Expected (BHD)", "Paid members"]])),
+                ("Gold portfolio", ["Holding", "Weight (g)", "Purchase rate (BHD/g)", "Live rate (BHD/g)", "Cost (BHD)", "Value (BHD)", "P/L (BHD)"], report_gold_rows),
+                ("Most pending members", ["Member", "Months", "Pending month names", "Amount due (BHD)"], report_pending_rows[:8] or report_pending_rows),
+            ], report_chart_data,
+        ),
+        "Member payment status": (
+            "Member payment status",
+            [("Members", str(member_count)), ("Paid this month", str(report_paid_count)),
+             ("Pending this month", str(report_due_count)), ("Monthly contribution", money(fee))],
+            [("Payment status · " + report_month_name, list(report_payment_status.columns), report_dataframe_rows(report_payment_status))],
+            None,
+        ),
+        "Full payment history": (
+            "Full member payment history", [("Members", str(member_count)), ("Months tracked", str(len(months)))],
+            [("Payment history by month", list(report_history.columns), report_dataframe_rows(report_history))], None,
+        ),
+        "Pending follow-ups": (
+            "Pending member follow-ups",
+            [("Pending members", str(sum(report_unpaid_counts > 0))), ("Current month outstanding", money(report_due_amount)),
+             ("Total fund outstanding", money(total_outstanding) if total_outstanding is not None else "Not listed")],
+            [("Pending through " + report_month_name, ["Member", "Months", "Pending month names", "Amount due (BHD)"], report_pending_rows)], None,
+        ),
+        "Fund ledger": (
+            "Fund ledger report",
+            [("Fund balance", money(balance) if balance is not None else "Not listed"),
+             ("Total collection", money(collected_ledger)),
+             ("Total outstanding", money(total_outstanding) if total_outstanding is not None else "Not listed")],
+            [("Ledger balances", ["Fund item", "Amount"], report_ledger_rows),
+             ("Monthly totals", list(report_monthly_view.columns), report_dataframe_rows(report_monthly_view))], None,
+        ),
+        "Monthly collections": (
+            "Monthly collections report",
+            [("Total collected", money(collected_ledger)), ("Monthly target per member", money(fee))],
+            [("Collection totals and targets", list(report_monthly_view.columns), report_dataframe_rows(report_monthly_view))],
+            report_chart_data,
+        ),
+        "Gold portfolio": (
+            "Gold portfolio report", report_gold_metrics,
+            [("Gold holdings and profit or loss", ["Holding", "Weight (g)", "Purchase rate (BHD/g)", "Live rate (BHD/g)", "Cost (BHD)", "Value (BHD)", "P/L (BHD)"], report_gold_rows)], None,
+        ),
+        "Reminder summary": (
+            "Reminder summary",
+            [("Members pending", str(sum(report_unpaid_counts > 0))), ("Outstanding this month", money(report_due_amount)),
+             ("Total fund outstanding", money(total_outstanding) if total_outstanding is not None else "Not listed"),
+             ("Gold P/L", money(gold_total_pnl))],
+            [
+                ("Pending contributions through " + report_month_name, ["Member", "Months", "Pending month names", "Amount due (BHD)"], report_pending_rows),
+                ("Group summary", ["Item", "Current value"], [
+                    ["Total contributions", money(collected_ledger)], ["Current month collected", money(report_selected_collection)],
+                    ["Paid members this month", f"{report_paid_count} of {member_count}"],
+                    ["Fund balance", money(balance) if balance is not None else "Not listed"],
+                    ["Shared IBAN", data.get("iban_no", "") or "Not listed"],
+                ]),
+            ], None,
+        ),
+    }
+    report_title, report_metrics, report_tables, report_chart = report_specs[report_type]
+    with st.container(border=True):
+        st.markdown(f"**{report_title} · {report_month_name}**")
+        st.caption(f"{len(report_tables)} worksheet section(s) · refreshed {data['loaded_at']:%d %b %Y at %H:%M}")
+        if report_format == "Excel":
+            report_payload = build_section_excel(
+                report_title, report_month, report_metrics, report_tables, data["loaded_at"]
+            )
+            report_extension = "xlsx"
+            report_mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        else:
+            report_payload = build_section_pdf(
+                report_title, report_month, report_metrics, report_tables, data["loaded_at"], report_chart
+            )
+            report_extension = "pdf"
+            report_mime = "application/pdf"
+        report_slug = re.sub(r"[^a-z0-9]+", "-", report_type.lower()).strip("-")
+        st.download_button(
+            f"Download {report_type} ({report_format})",
+            data=report_payload,
+            file_name=f"khair-{report_slug}-{report_month.lower()}.{report_extension}",
+            mime=report_mime,
+            icon=":material/download:",
+            type="primary",
+            key=f"central_report_{report_slug}_{report_month}_{report_format}",
+        )
 
 st.caption("Khair · Group fund dashboard · Read-only connection")
